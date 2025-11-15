@@ -12,6 +12,8 @@ import {
 } from "@/shared/constants/agent";
 import { AgentEvent } from "@/agent/agent.type";
 import { Account } from "@/agent/agent.type";
+import { InterviewerService } from "@/interviewer/interviewer.service";
+import { TTSProvider } from "./tts.provider";
 
 @Injectable()
 export class AgentService {
@@ -25,7 +27,9 @@ export class AgentService {
   constructor(
     @InjectQueue("tts") private readonly ttsQueue: Queue,
     private readonly configService: ConfigService,
-    private readonly axiosClient: AxiosClient
+    private readonly axiosClient: AxiosClient,
+    private readonly interviewer: InterviewerService,
+    private readonly ttsService: TTSProvider
   ) {}
 
   async handleRemoveAgent(
@@ -138,7 +142,14 @@ export class AgentService {
           this.pushSSEMessage(meeting_code, event.data);
         };
 
-        es.onopen = () => {
+        es.onopen = async () => {
+          const start = await this.interviewer.getResponse(
+            "<start/>",
+            meeting_code
+          );
+          console.log(start);
+          await this.ttsService.callTTSAPI(meeting_code, start);
+
           this.logger.log(`[SSE][Room ${meeting_code}] connected`);
         };
 

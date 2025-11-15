@@ -1,13 +1,15 @@
-import { NezonModule } from "@n0xgg04/nezon";
-import { Module } from "@nestjs/common";
-import { ConfigModule, ConfigService } from "@nestjs/config";
-import { BullModule } from "@nestjs/bull";
 import { AgentModule } from "@/agent/agent.module";
 import { EnglishTestModule } from "@/english-test/english-test.module";
 import { envValidationSchema } from "@/shared/config/env.config";
+import { NezonModule } from "@n0xgg04/nezon";
+import { BullModule } from "@nestjs/bull";
+import { Module } from "@nestjs/common";
+import { ConfigModule, ConfigService } from "@nestjs/config";
+import { InterviewerModule } from "./interviewer/interviewer.module";
 
 @Module({
   imports: [
+    InterviewerModule,
     AgentModule,
     ConfigModule.forRoot({
       isGlobal: true,

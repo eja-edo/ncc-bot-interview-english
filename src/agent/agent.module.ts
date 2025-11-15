@@ -4,6 +4,7 @@ import { AgentService } from "@/agent/agent.provider";
 import { TTSProcessor } from "@/agent/tts.processor";
 import { AxiosClient } from "@/shared/lib/axios-client";
 import { TTSProvider } from "./tts.provider";
+import { InterviewerModule } from "@/interviewer/interviewer.module";
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { TTSProvider } from "./tts.provider";
         removeOnFail: 50,
       },
     }),
+    InterviewerModule,
   ],
   controllers: [],
   providers: [AgentService, TTSProcessor, AxiosClient, TTSProvider],

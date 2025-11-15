@@ -10,6 +10,8 @@ export const envValidationSchema = Joi.object({
   MEZON_TOKEN: Joi.string().required(),
   MEZON_BOT_ID: Joi.string().required(),
 
+  OPENAI_API_KEY: Joi.string().optional(),
+
   REDIS_HOST: Joi.string().default("localhost"),
   REDIS_PORT: Joi.number().default(6379),
   REDIS_PASSWORD: Joi.string().optional().allow(""),
