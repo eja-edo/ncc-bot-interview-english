@@ -12,8 +12,18 @@ import {
 } from "@/shared/constants/agent";
 import { AgentEvent } from "@/agent/agent.type";
 import { Account } from "@/agent/agent.type";
-import { InterviewerService } from "@/interviewer/interviewer.service";
 import { TTSProvider } from "./tts.provider";
+import { EnhancedInterviewerService } from "@/interviewer/interview.service";
+import { InterviewSessionService } from "@/interviewer/interview-session.service";
+import { MessageRole, MessageType } from "@/database-test/entities/session-message.entity";
+import { channel } from "diagnostics_channel";
+
+interface VoiceBuffer {
+  chunks: string[];
+  lastUpdateTime: number;
+  timeoutHandle: NodeJS.Timeout | null;
+  isProcessing: boolean;
+}
 
 @Injectable()
 export class AgentService {
@@ -24,13 +34,16 @@ export class AgentService {
   private readonly BATCH_DELAY_MS = 1000;
   private readonly BATCH_SIZE = 1;
 
+  private readonly roomSessions = new Map<string, string>();
+
   constructor(
     @InjectQueue("tts") private readonly ttsQueue: Queue,
     private readonly configService: ConfigService,
     private readonly axiosClient: AxiosClient,
-    private readonly interviewer: InterviewerService,
-    private readonly ttsService: TTSProvider
-  ) {}
+    private readonly interviewer: EnhancedInterviewerService,
+    private readonly ttsService: TTSProvider,
+    private readonly sessionService: InterviewSessionService,
+  ) { }
 
   async handleRemoveAgent(
     client: Nezon.Client,
@@ -67,6 +80,13 @@ export class AgentService {
       if (existingSSE) {
         existingSSE.close();
         this.sseConnections.delete(sseKey);
+        this.logger.log(`🔌 Closed SSE connection for room ${meeting_code}`);
+      }
+
+      if (this.roomSessions.has(meeting_code)) {
+        const sessionId = this.roomSessions.get(meeting_code);
+        this.roomSessions.delete(meeting_code);
+        this.logger.log(`🗑️ Cleared session ${sessionId} mapping for room ${meeting_code}`);
       }
     } catch (error) {
       this.logger.error(
@@ -110,8 +130,7 @@ export class AgentService {
       } catch (error) {
         if (axios.isAxiosError(error) && error.response) {
           this.logger.error(
-            `Invalid response from API: ${
-              error.response.status
+            `Invalid response from API: ${error.response.status
             } - ${JSON.stringify(error.response.data)}`
           );
         } else {
@@ -132,25 +151,32 @@ export class AgentService {
         const sseKey = `${account.appid}-${meeting_code}`;
         const existingSSE = this.sseConnections.get(sseKey);
         if (existingSSE) {
+          this.logger.log(`🔌 Closing existing SSE connection for room ${meeting_code}`);
           existingSSE.close();
+          this.sseConnections.delete(sseKey);
         }
 
+        this.logger.log(`🔌 Creating NEW SSE connection for room ${meeting_code}`);
         const es = new EventSource(sseUrl);
+
+        es.onopen = () => {
+          this.logger.log(`✅ SSE connection OPENED for room ${meeting_code}`);
+        };
 
         es.onmessage = (event) => {
           this.logger.log(`[SSE][Room ${meeting_code}] data: ${event.data}`);
-          this.pushSSEMessage(meeting_code, event.data);
-        };
+          //this.pushSSEMessage(meeting_code, event.data);
 
-        es.onopen = async () => {
-          const start = await this.interviewer.getResponse(
-            "<start/>",
-            meeting_code
-          );
-          console.log(start);
-          await this.ttsService.callTTSAPI(meeting_code, start);
+          // Check session mapping
+          const sessionId = this.roomSessions.get(meeting_code);
+          if (!sessionId) {
+            this.logger.error(`❌ [SSE] No session mapped for room ${meeting_code}!`);
+            this.logger.log(`📊 Current mappings: ${JSON.stringify(Array.from(this.roomSessions.entries()))}`);
+            return;
+          }
 
-          this.logger.log(`[SSE][Room ${meeting_code}] connected`);
+          this.logger.log(`✅ [SSE] Found session ${sessionId} for room ${meeting_code}`);
+          this.handleVoiceMessage(meeting_code, event.data, client);
         };
 
         es.onerror = (error: Event) => {
@@ -182,64 +208,248 @@ export class AgentService {
     }
   }
 
-  private pushSSEMessage(meeting_code: string, data: string): void {
-    if (!this.roomMessageBuffers.has(meeting_code)) {
-      this.roomMessageBuffers.set(meeting_code, []);
+  private async handleVoiceMessage(
+    roomName: string,
+    data: string,
+    client: Nezon.Client,
+  ): Promise<void> {
+    try {
+      // Clean and validate data
+      const voiceText = data.trim();
+
+      if (!voiceText || voiceText.length < 2) {
+        this.logger.log(`[Voice] Skipping empty/short message`);
+        return;
+      }
+
+      this.logger.log(`[Voice][Room ${roomName}] Processing: "${voiceText}"`);
+
+      // Get session for this room
+      const sessionId = this.roomSessions.get(roomName);
+      if (!sessionId) {
+        this.logger.warn(`[Voice] No session found for room ${roomName}`);
+        return;
+      }
+
+      const session = await this.sessionService.getSessionById(sessionId);
+      if (!session) {
+        this.logger.warn(`[Voice] Session ${sessionId} not found`);
+        return;
+      }
+
+      // Check if first message or answer
+      const userMessages = session.messages?.filter(m => m.role === MessageRole.USER) || [];
+      const isFirstMessage = userMessages.length === 0;
+
+      // Save voice message to DB
+      await this.sessionService.addMessage(
+        session.id,
+        MessageRole.USER,
+        voiceText,
+        MessageType.AUDIO,
+        isFirstMessage ? undefined : session.currentQuestionIndex,
+      );
+
+      this.logger.log(`[Voice] Saved message to session ${session.id}`);
+
+      // Send confirmation to text channel
+      const channel = client.channels.get(session.channelId);
+      if (channel) {
+        await channel.send({
+          t: `${voiceText}`
+        });
+      }
+
+      // Process the answer
+      await this.processUserAnswer(session, client, session.channelId);
+
+    } catch (error) {
+      this.logger.error(`[Voice] Error processing message:`, error);
     }
-
-    this.roomMessageBuffers.get(meeting_code)!.push(data);
-
-    this.scheduleRoomProcessing(meeting_code);
   }
 
-  private scheduleRoomProcessing(roomName: string): void {
-    const existingTimer = this.roomTimers.get(roomName);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-    }
+  /**
+   * Common logic to process user's answer (from text or voice)
+   */
+  async processUserAnswer(
+    session: any,
+    client: Nezon.Client,
+    channelId: string,
+  ): Promise<void> {
+    const nextQuestionNumber = session.currentQuestionIndex + 1;
+    const totalQuestions = session.template.numberOfQuestions;
 
-    const timer = setTimeout(() => {
-      this.roomTimers.delete(roomName);
-      this.flushRoomBuffer(roomName);
-    }, this.BATCH_DELAY_MS);
+    // Check if complete
+    if (nextQuestionNumber > totalQuestions) {
+      this.logger.log('Interview complete, generating feedback');
+      const overallFeedback = await this.interviewer.generateOverallFeedback(
+        await this.sessionService.getSessionById(session.id),
+      );
 
-    this.roomTimers.set(roomName, timer);
-  }
+      await this.sessionService.completeSession(session.id, overallFeedback);
 
-  private async flushRoomBuffer(roomName: string): Promise<void> {
-    const buffer = this.roomMessageBuffers.get(roomName);
-    if (!buffer || buffer.length === 0) {
+      const completedSession = await this.sessionService.getSessionById(session.id);
+
+      // Send TTS completion
+      const spokenCompletion = 'Congratulations! You have completed the interview. Thank you for your time joining this interview';
+
+      // Save bot's completion message
+      await this.sessionService.addMessage(
+        session.id,
+        MessageRole.ASSISTANT,
+        spokenCompletion,
+        MessageType.TEXT,
+      );
+      await this.sendTTS(session.roomName, spokenCompletion);
+
+      // Completion message
+      const completionMessage = `🎉 **Interview Complete!**
+
+"${spokenCompletion}"
+
+**Session Summary:**
+ Template: ${session.template.name}
+ Questions Answered: ${session.template.numberOfQuestions}
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+Generating detailed feedback...`;
+      // Send final feedback to text channel
+      const channel = client.channels.get(channelId);
+      if (channel) {
+        await channel.send({ t: completionMessage });
+      } else {
+        this.logger.error(`Channel ${channelId} not found`);
+      }
       return;
     }
 
-    const messages = buffer.splice(0, this.BATCH_SIZE);
+    // Generate next question
+    this.logger.log(`Generating question ${nextQuestionNumber}`);
 
-    try {
-      await this.ttsQueue.add(
-        "process-room",
-        {
-          roomName,
-          messages,
-        },
-        {
-          attempts: 3,
-          backoff: {
-            type: "exponential",
-            delay: 2000,
-          },
-          removeOnComplete: true,
-          removeOnFail: false,
-        }
-      );
+    const nextQuestion = await this.interviewer.generateQuestion(
+      await this.sessionService.getSessionById(session.id),
+      nextQuestionNumber,
+    );
 
-      if (buffer.length > 0) {
-        this.scheduleRoomProcessing(roomName);
-      }
-    } catch (error) {
-      this.logger.error(
-        `[TTS] Error adding job to queue for room ${roomName}: ${error}`,
-        (error as Error)?.stack
-      );
+    // Save next question
+    await this.sessionService.addMessage(
+      session.id,
+      MessageRole.ASSISTANT,
+      nextQuestion,
+      MessageType.TEXT, // Will be spoken via voice
+      nextQuestionNumber,
+    );
+
+    // Send TTS for next question
+    await this.sendTTS(session.roomName, nextQuestion);
+
+    const responseMessage = ` Answer recorded!
+
+**Bot is speaking the next question via voice...**
+
+If you want to see the text:
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Question ${nextQuestionNumber}/${totalQuestions}:**
+
+${nextQuestion}
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+Type your answer or speak in the voice room...`;
+
+    const channel = client.channels.get(channelId);
+    if (channel) {
+      await channel.send({ t: responseMessage });
+    } else {
+      this.logger.error(`Channel ${channelId} not found`);
     }
+  }
+
+  // private pushSSEMessage(meeting_code: string, data: string): void {
+  //   if (!this.roomMessageBuffers.has(meeting_code)) {
+  //     this.roomMessageBuffers.set(meeting_code, []);
+  //   }
+
+  //   this.roomMessageBuffers.get(meeting_code)!.push(data);
+
+  //   this.scheduleRoomProcessing(meeting_code);
+  // }
+
+  // private scheduleRoomProcessing(roomName: string): void {
+  //   const existingTimer = this.roomTimers.get(roomName);
+  //   if (existingTimer) {
+  //     clearTimeout(existingTimer);
+  //   }
+
+  //   const timer = setTimeout(() => {
+  //     this.roomTimers.delete(roomName);
+  //     this.flushRoomBuffer(roomName);
+  //   }, this.BATCH_DELAY_MS);
+
+  //   this.roomTimers.set(roomName, timer);
+  // }
+
+  // private async flushRoomBuffer(roomName: string): Promise<void> {
+  //   const buffer = this.roomMessageBuffers.get(roomName);
+  //   if (!buffer || buffer.length === 0) {
+  //     return;
+  //   }
+
+  //   const messages = buffer.splice(0, this.BATCH_SIZE);
+
+  //   try {
+  //     await this.ttsQueue.add(
+  //       "process-room",
+  //       {
+  //         roomName,
+  //         messages,
+  //       },
+  //       {
+  //         attempts: 3,
+  //         backoff: {
+  //           type: "exponential",
+  //           delay: 2000,
+  //         },
+  //         removeOnComplete: true,
+  //         removeOnFail: false,
+  //       }
+  //     );
+
+  //     if (buffer.length > 0) {
+  //       this.scheduleRoomProcessing(roomName);
+  //     }
+  //   } catch (error) {
+  //     this.logger.error(
+  //       `[TTS] Error adding job to queue for room ${roomName}: ${error}`,
+  //       (error as Error)?.stack
+  //     );
+  //   }
+  // }
+  /**
+   * NEW: Link existing session to room (bot already in room)
+   */
+  async linkSessionToRoom(roomName: string, sessionId: string): Promise<void> {
+    this.roomSessions.set(roomName, sessionId);
+    this.logger.log(`Linked session ${sessionId} to room ${roomName}`);
+  }
+
+  /**
+   * NEW: Send TTS directly without going through queue
+   */
+  async sendTTS(roomName: string, text: string): Promise<void> {
+    try {
+      await this.ttsService.callTTSAPI(roomName, text);
+      this.logger.log(`[TTS SENT] Room ${roomName}: ${text.substring(0, 100)}...`);
+    } catch (error) {
+      this.logger.error(`Failed to send TTS for room ${roomName}:`, error);
+      throw error;
+    }
+  }
+
+  getSessionIdForRoom(roomName: string): string | undefined {
+    return this.roomSessions.get(roomName);
   }
 }
