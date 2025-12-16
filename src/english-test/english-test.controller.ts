@@ -81,7 +81,6 @@ export class EnglishTestController {
             new EmbedBuilder()
               .setColor('#0099ff')
               .setTitle('Interview Template Selection')
-              .setDescription('👉 Please select a template below')
               .addSelectField(
                 'Choose a template...',
                 'template',

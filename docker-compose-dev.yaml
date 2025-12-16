@@ -1,0 +1,70 @@
+version: "3.8"
+
+services:
+  app:
+    image: hieu123/interview-bot:dev
+    container_name: ncc-bot-interview-english
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.dev
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./src:/app/src
+      - ./dist:/app/dist
+    depends_on:
+      - redis
+      - postgres
+    restart: unless-stopped
+    networks:
+      - app-network
+    command: yarn start:dev
+
+  redis:
+    image: redis:7-alpine
+    container_name: ncc-bot-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: ncc-bot-postgres
+    environment:
+      POSTGRES_DB: interview_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  migrator:
+    image: hieu123/interview-bot:dev
+    container_name: interview-bot-migrator-dev
+    env_file:
+      - .env.dev
+    command: ["yarn", "typeorm", "migration:run"]
+    depends_on:
+      - postgres
+
+volumes:
+  pg-data:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  app-network:
+    driver: bridge
