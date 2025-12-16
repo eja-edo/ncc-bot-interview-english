@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   app:
-    image: hieu123/interview-bot:dev
+    image: hieukudo298/interview-bot:dev
     container_name: ncc-bot-interview-english
     build:
       context: .
@@ -51,7 +51,7 @@ services:
       - app-network
 
   migrator:
-    image: hieu123/interview-bot:dev
+    image: hieukudo298/interview-bot:dev
     container_name: interview-bot-migrator-dev
     env_file:
       - .env.dev

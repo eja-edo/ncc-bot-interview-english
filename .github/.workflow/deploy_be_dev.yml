@@ -45,7 +45,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            cd /opt/interview-bot/dev
+            cd /opt/interview-bot/hieu-dev
             docker compose pull
             docker compose run --rm migrator
             docker compose up -d app
