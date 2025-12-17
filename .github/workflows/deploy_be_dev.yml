@@ -6,7 +6,7 @@ on:
     paths:
       - 'src/**'
       - 'package.json'
-      - '.github/.workflow/deploy_be_dev.yml' 
+      - '.github/workflows/deploy_be_dev.yml' 
 jobs:
   deploy:
     runs-on: ubuntu-latest
