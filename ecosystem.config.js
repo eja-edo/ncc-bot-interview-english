@@ -3,17 +3,11 @@ module.exports = {
   apps: [
     {
       name: 'interview-bot-prod',
-      script: './dist/main.js',
+      script: 'yarn start',
       
       // Instances
       instances: 1,
       exec_mode: 'cluster',
-      
-      // Environment variables
-      env_production: {
-        NODE_ENV: 'production',
-        PORT: 3000,
-      },
       
       // Logging
       error_file: './logs/error.log',
@@ -36,16 +30,6 @@ module.exports = {
       // Advanced features
       kill_timeout: 5000,
       listen_timeout: 10000,
-      
-      // Cron restart (optional - restart every day at 3 AM)
-      // cron_restart: '0 3 * * *',
-      
-      // Health check (if you have /health endpoint)
-      // health_check: {
-      //   interval: 30000,  // 30 seconds
-      //   url: 'http://localhost:3000/health',
-      //   type: 'http',
-      // },
     },
   ],
   
