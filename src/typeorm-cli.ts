@@ -9,7 +9,7 @@ export default new DataSource({
   port: Number(process.env.DB_PORT || 5432),
   username: process.env.DB_USERNAME || 'postgres',
   password: process.env.DB_PASSWORD || '2982003',
-  database: 'interview_bot_test', // DB mới
+  database: process.env.DB_NAME || 'interview_bot_test',
   entities: [
     'src/database-test/entities/*.entity.ts', 
   ],
