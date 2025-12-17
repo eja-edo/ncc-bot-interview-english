@@ -83,7 +83,7 @@ export class InterviewSessionService {
       where: {
         userId,
         channelId,
-        status: SessionStatus.IN_PROGRESS,
+        status: SessionStatus.IN_PROGRESS || SessionStatus.COMPLETED,
       },
       relations: ['template', 'user', 'messages'],
     });
