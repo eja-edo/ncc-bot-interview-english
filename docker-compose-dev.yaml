@@ -1,8 +1,5 @@
-version: "3.8"
-
 services:
   app:
-    image: hieukudo298/interview-bot:dev
     container_name: ncc-bot-interview-english
     build:
       context: .
@@ -51,11 +48,15 @@ services:
       - app-network
 
   migrator:
-    image: hieukudo298/interview-bot:dev
     container_name: interview-bot-migrator-dev
+    build:
+      context: .
+      dockerfile: Dockerfile
     env_file:
       - .env.dev
     command: ["yarn", "typeorm", "migration:run"]
+    volumes:
+    - ./src:/app/src
     depends_on:
       - postgres
 

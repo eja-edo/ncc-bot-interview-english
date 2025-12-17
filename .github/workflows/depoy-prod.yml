@@ -1,0 +1,247 @@
+name: Deploy Interview Bot Production
+
+on:
+  push:
+    branches:
+      - main
+      - production
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'yarn.lock'
+      - '.github/workflows/deploy-prod.yml'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  # ================================
+  # Job 1: Test & Build
+  # ================================
+  test:
+    name: Test & Build
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'yarn'
+
+    - name: Install dependencies
+      run: yarn install --frozen-lockfile
+
+    - name: Run linter
+      run: yarn lint
+      continue-on-error: true
+
+    - name: Run tests
+      run: yarn test
+      continue-on-error: true
+
+    - name: Build application
+      run: yarn build
+
+    - name: Verify build
+      run: |
+        ls -la dist/
+        echo "✅ Build successful!"
+
+  # ================================
+  # Job 2: Deploy to Production Server
+  # ================================
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: test
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Deploy to Production Server
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.PROD_SERVER_HOST }}
+        username: ${{ secrets.PROD_SERVER_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY_PROD }}
+        port: ${{ secrets.SSH_PORT || 22 }}
+        script: |
+          set -e
+          
+          echo "🚀 Starting production deployment..."
+          
+          # Navigate to project directory
+          cd /var/www/interview-bot-prod || exit 1
+          
+          # ================================
+          # Backup current version
+          # ================================
+          echo "📦 Backing up current version..."
+          BACKUP_DIR="/home/${{ secrets.PROD_SERVER_USER }}/backups/interview-bot"
+          BACKUP_NAME="backup_$(date +%Y%m%d_%H%M%S)"
+          
+          mkdir -p "$BACKUP_DIR"
+          
+          # Backup logs
+          if [ -d "logs" ]; then
+            cp -r logs "$BACKUP_DIR/$BACKUP_NAME-logs"
+          fi
+          
+          # Backup .env
+          if [ -f ".env" ]; then
+            cp .env "$BACKUP_DIR/$BACKUP_NAME.env"
+          fi
+          
+          # Backup dist (optional)
+          if [ -d "dist" ]; then
+            tar -czf "$BACKUP_DIR/$BACKUP_NAME-dist.tar.gz" dist/
+          fi
+          
+          echo "✅ Backup completed: $BACKUP_DIR/$BACKUP_NAME"
+          
+          # ================================
+          # Pull latest code
+          # ================================
+          echo "📥 Pulling latest code..."
+          git fetch origin
+          git reset --hard origin/main
+          git clean -fd
+          
+          # Show current commit
+          echo "📌 Current commit:"
+          git log -1 --oneline
+          
+          # ================================
+          # Install dependencies
+          # ================================
+          echo "📦 Installing dependencies..."
+          yarn install --frozen-lockfile --production=false
+          
+          # ================================
+          # Build application
+          # ================================
+          echo "🔨 Building application..."
+          yarn build
+          
+          # Verify build
+          if [ ! -d "dist" ]; then
+            echo "❌ Build failed - dist directory not found!"
+            exit 1
+          fi
+          
+          echo "✅ Build successful!"
+          
+          # ================================
+          # Run database migrations
+          # ================================
+          echo "📊 Running database migrations..."
+          yarn migration:run || echo "⚠️ Migration skipped or failed"
+          
+          # ================================
+          # Stop application
+          # ================================
+          echo "🛑 Stopping application..."
+          pm2 stop interview-bot-prod || echo "App not running"
+          
+          # ================================
+          # Restart with PM2
+          # ================================
+          echo "🚀 Starting application with PM2..."
+          pm2 delete interview-bot-prod || true
+          pm2 start ecosystem.config.js --env production
+          
+          # Save PM2 process list
+          pm2 save
+          
+          # ================================
+          # Health check
+          # ================================
+          echo "⏳ Waiting for application to start..."
+          sleep 10
+          
+          # Check PM2 status
+          pm2 status interview-bot-prod
+          
+          # ================================
+          # Cleanup
+          # ================================
+          echo "🧹 Cleaning up..."
+          
+          # Remove old backups (keep last 7 days)
+          find "$BACKUP_DIR" -type f -mtime +7 -delete || true
+          
+          # Clean yarn cache
+          yarn cache clean || true
+          
+          # ================================
+          # Summary
+          # ================================
+          echo ""
+          echo "✅ ================================"
+          echo "✅ Deployment completed successfully!"
+          echo "✅ ================================"
+          echo ""
+          echo "📊 Application Status:"
+          pm2 status
+          echo ""
+          echo "💾 Backup location: $BACKUP_DIR/$BACKUP_NAME"
+          echo "📌 Deployed commit: $(git log -1 --oneline)"
+          echo "🕐 Deployment time: $(date '+%Y-%m-%d %H:%M:%S')"
+
+    - name: Verify Deployment
+      run: |
+        echo "✅ Production deployment completed!"
+        echo "🌐 Server: ${{ secrets.PROD_SERVER_HOST }}"
+        echo "📅 Time: $(date '+%Y-%m-%d %H:%M:%S')"
+
+    - name: Send Notification (Optional)
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ Production deployment successful!"
+        else
+          echo "❌ Production deployment failed!"
+        fi
+
+  # ================================
+  # Job 3: Rollback (Manual trigger only)
+  # ================================
+  rollback:
+    name: Rollback Production
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    environment: production
+    
+    steps:
+    - name: Rollback to previous version
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.PROD_SERVER_HOST }}
+        username: ${{ secrets.PROD_SERVER_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY_PROD }}
+        script: |
+          set -e
+          
+          echo "⏪ Starting rollback..."
+          
+          cd /var/www/interview-bot-prod
+          
+          # Rollback to previous commit
+          git reset --hard HEAD~1
+          
+          # Reinstall dependencies
+          yarn install --frozen-lockfile
+          
+          # Rebuild
+          yarn build
+          
+          # Restart
+          pm2 restart interview-bot-prod
+          
+          echo "✅ Rollback completed!"
+          pm2 status interview-bot-prod

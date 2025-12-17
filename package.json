@@ -21,10 +21,9 @@
     "test:interview": "ts-node src/test/test-interview-agent.ts",
     "test:interview:auto": "ts-node src/test/test-interview-agent.ts auto",
     "test:scenarios": "ts-node src/test/test-scenarios.ts",
-    "typeorm:test": "typeorm-ts-node-commonjs -d ./src/typeorm-cli-test.ts",
-    "migration:test:generate": "npm run typeorm:test -- migration:generate src/database-test/migrations/UpdateTestDB",
-    "migration:test:run": "npm run typeorm:test -- migration:run",
-    "migration:test:create": "npm run typeorm:test -- migration:create src/database-test/migrations/NewMigration"
+    "migration:generate": "npm run typeorm -- migration:generate src/database-test/migrations/UpdateTestDB",
+    "migration:run": "npm run typeorm -- migration:run",
+    "migration:create": "npm run typeorm -- migration:create src/database-test/migrations/NewMigration"
   },
   "dependencies": {
     "@bull-board/api": "^6.14.2",
