@@ -34,6 +34,6 @@ jobs:
       - name: Deploy & Restart Service
         run: |
             rm -rf /home/nccsoft/ncc-bot-interview-english/dist/*
-            cp -rf dist/* /home/nccsoft/mezon-bot-voice/dist/
+            cp -rf dist/* /home/nccsoft/ncc-bot-interview-english/dist/
             pm2 restart mezon-interview-english-prod
 
