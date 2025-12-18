@@ -1,34 +1,31 @@
+# .github/workflows/deploy-prod.yml
 name: Deploy Interview Bot Production
 
 on:
   push:
     branches:
-      - main
-      - production
+      - hieu/dev
     paths:
       - 'src/**'
       - 'package.json'
       - 'yarn.lock'
+      - 'ecosystem.config.js'
       - '.github/workflows/deploy-prod.yml'
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
 
 jobs:
-  # ================================
-  # Job 1: Test & Build
-  # ================================
   test:
     name: Test & Build
     runs-on: ubuntu-latest
-    environment: production
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Setup Node.js
+    - name: Setup Node.js 22
       uses: actions/setup-node@v4
       with:
-        node-version: '20'
+        node-version: '22'
         cache: 'yarn'
 
     - name: Install dependencies
@@ -45,16 +42,17 @@ jobs:
     - name: Build application
       run: yarn build
 
-    - name: Verify build
+    - name: Verify build output
       run: |
         ls -la dist/
+        if [ ! -f "dist/main.js" ]; then
+          echo "❌ Build failed - main.js not found!"
+          exit 1
+        fi
         echo "✅ Build successful!"
 
-  # ================================
-  # Job 2: Deploy to Production Server
-  # ================================
   deploy:
-    name: Deploy to Production
+    name: Deploy to Production Server
     runs-on: ubuntu-latest
     needs: test
     environment: production
@@ -63,185 +61,231 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Deploy to Production Server
+    - name: Deploy to Server
       uses: appleboy/ssh-action@v1.0.0
       with:
         host: ${{ secrets.PROD_SERVER_HOST }}
         username: ${{ secrets.PROD_SERVER_USER }}
-        key: ${{ secrets.SSH_PRIVATE_KEY_PROD }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
         port: ${{ secrets.SSH_PORT || 22 }}
         script: |
           set -e
           
-          echo "🚀 Starting production deployment..."
+          echo "🚀 ================================"
+          echo "🚀 Starting Production Deployment"
+          echo "🚀 ================================"
+          echo ""
           
+          # ================================
+          # Setup NVM and Node 22
+          # ================================
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+          
+          # Use Node 22
+          nvm use 22 || nvm install 22
+          
+          echo "📌 Node version: $(node --version)"
+          echo "📌 NPM version: $(npm --version)"
+          echo "📌 Yarn version: $(yarn --version)"
+          
+          # ================================
           # Navigate to project directory
-          cd /var/www/interview-bot-prod || exit 1
+          # ================================
+          PROJECT_DIR="$HOME/ncc-bot-interview-english"
+          
+          if [ ! -d "$PROJECT_DIR" ]; then
+            echo "❌ Project directory not found: $PROJECT_DIR"
+            exit 1
+          fi
+          
+          cd "$PROJECT_DIR"
+          echo "📂 Working directory: $(pwd)"
           
           # ================================
           # Backup current version
           # ================================
-          echo "📦 Backing up current version..."
-          BACKUP_DIR="/home/${{ secrets.PROD_SERVER_USER }}/backups/interview-bot"
-          BACKUP_NAME="backup_$(date +%Y%m%d_%H%M%S)"
+          echo ""
+          echo "📦 Creating backup..."
+          
+          BACKUP_DIR="$HOME/backups/interview-bot"
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
           
           mkdir -p "$BACKUP_DIR"
           
           # Backup logs
           if [ -d "logs" ]; then
-            cp -r logs "$BACKUP_DIR/$BACKUP_NAME-logs"
+            cp -r logs "$BACKUP_DIR/logs_$TIMESTAMP" 2>/dev/null || true
           fi
           
           # Backup .env
           if [ -f ".env" ]; then
-            cp .env "$BACKUP_DIR/$BACKUP_NAME.env"
+            cp .env "$BACKUP_DIR/.env_$TIMESTAMP" 2>/dev/null || true
           fi
           
-          # Backup dist (optional)
-          if [ -d "dist" ]; then
-            tar -czf "$BACKUP_DIR/$BACKUP_NAME-dist.tar.gz" dist/
-          fi
+          # Backup current commit info
+          git rev-parse HEAD > "$BACKUP_DIR/commit_$TIMESTAMP.txt" 2>/dev/null || true
           
-          echo "✅ Backup completed: $BACKUP_DIR/$BACKUP_NAME"
+          echo "✅ Backup saved: $BACKUP_DIR/*_$TIMESTAMP"
           
           # ================================
           # Pull latest code
           # ================================
-          echo "📥 Pulling latest code..."
-          git fetch origin
-          git reset --hard origin/main
+          echo ""
+          echo "📥 Pulling latest code from hieu/dev..."
+          
+          CURRENT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+          echo "  → Current commit: $CURRENT_COMMIT"
+          
+          # Fetch and reset
+          git fetch origin hieu/dev
+          git reset --hard origin/hieu/dev
           git clean -fd
           
-          # Show current commit
-          echo "📌 Current commit:"
-          git log -1 --oneline
+          NEW_COMMIT=$(git rev-parse HEAD)
+          echo "  → New commit: $NEW_COMMIT"
+          
+          if [ "$CURRENT_COMMIT" != "$NEW_COMMIT" ]; then
+            echo "📝 Changes deployed:"
+            git log --oneline --no-decorate $CURRENT_COMMIT..$NEW_COMMIT 2>/dev/null | head -10 || echo "  (new deployment)"
+          else
+            echo "⚠️  No code changes detected (force redeploy)"
+          fi
           
           # ================================
           # Install dependencies
           # ================================
+          echo ""
           echo "📦 Installing dependencies..."
-          yarn install --frozen-lockfile --production=false
+          
+          yarn install --frozen-lockfile
+          
+          echo "✅ Dependencies installed"
           
           # ================================
           # Build application
           # ================================
+          echo ""
           echo "🔨 Building application..."
+          
+          # Clean old build
+          rm -rf dist
+          
+          # Build with Nest CLI
           yarn build
           
           # Verify build
-          if [ ! -d "dist" ]; then
-            echo "❌ Build failed - dist directory not found!"
+          if [ ! -f "dist/main.js" ]; then
+            echo "❌ Build failed - dist/main.js not found!"
+            echo "Rolling back..."
+            git reset --hard $CURRENT_COMMIT
             exit 1
           fi
           
-          echo "✅ Build successful!"
+          echo "✅ Build completed successfully"
+          ls -lh dist/main.js
           
           # ================================
           # Run database migrations
           # ================================
+          echo ""
           echo "📊 Running database migrations..."
-          yarn migration:run || echo "⚠️ Migration skipped or failed"
+          
+          yarn migration:run || {
+            echo "⚠️  No migrations to run or migration failed (continuing...)"
+          }
           
           # ================================
-          # Stop application
+          # Reload PM2
           # ================================
-          echo "🛑 Stopping application..."
-          pm2 stop interview-bot-prod || echo "App not running"
+          echo ""
+          echo "🔄 Reloading application with PM2..."
+          
+          # Check if PM2 process exists
+          if pm2 describe interview-bot-prod > /dev/null 2>&1; then
+            echo "  → Reloading existing PM2 process..."
+            pm2 reload ecosystem.config.js --update-env
+          else
+            echo "  → Starting new PM2 process..."
+            pm2 delete interview-bot-prod 2>/dev/null || true
+            pm2 start ecosystem.config.js --env production
+          fi
+          
+          # Save PM2 configuration
+          pm2 save --force
+          
+          echo "✅ PM2 reload completed"
           
           # ================================
-          # Restart with PM2
+          # Wait and verify
           # ================================
-          echo "🚀 Starting application with PM2..."
-          pm2 delete interview-bot-prod || true
-          pm2 start ecosystem.config.js --env production
-          
-          # Save PM2 process list
-          pm2 save
-          
-          # ================================
-          # Health check
-          # ================================
+          echo ""
           echo "⏳ Waiting for application to start..."
-          sleep 10
+          sleep 8
           
-          # Check PM2 status
-          pm2 status interview-bot-prod
+          # Check if app is running
+          if pm2 describe interview-bot-prod | grep -q "online"; then
+            echo "✅ Application is running!"
+          else
+            echo "❌ Application failed to start!"
+            echo ""
+            echo "📝 PM2 Status:"
+            pm2 status
+            echo ""
+            echo "📝 Recent logs:"
+            pm2 logs interview-bot-prod --lines 30 --nostream
+            exit 1
+          fi
           
           # ================================
-          # Cleanup
+          # Cleanup old backups
           # ================================
-          echo "🧹 Cleaning up..."
-          
-          # Remove old backups (keep last 7 days)
-          find "$BACKUP_DIR" -type f -mtime +7 -delete || true
-          
-          # Clean yarn cache
-          yarn cache clean || true
+          echo ""
+          echo "🧹 Cleaning up old backups (keeping last 7 days)..."
+          find "$BACKUP_DIR" -type f -mtime +7 -delete 2>/dev/null || true
+          find "$BACKUP_DIR" -type d -empty -delete 2>/dev/null || true
           
           # ================================
-          # Summary
+          # Deployment Summary
           # ================================
           echo ""
           echo "✅ ================================"
-          echo "✅ Deployment completed successfully!"
+          echo "✅ Deployment Successfully Completed!"
           echo "✅ ================================"
           echo ""
           echo "📊 Application Status:"
-          pm2 status
+          pm2 status interview-bot-prod
           echo ""
-          echo "💾 Backup location: $BACKUP_DIR/$BACKUP_NAME"
-          echo "📌 Deployed commit: $(git log -1 --oneline)"
-          echo "🕐 Deployment time: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "📝 Recent Application Logs:"
+          pm2 logs interview-bot-prod --lines 20 --nostream
+          echo ""
+          echo "📌 Deployed Commit: $NEW_COMMIT"
+          echo "💾 Backup Location: $BACKUP_DIR/*_$TIMESTAMP"
+          echo "🕐 Deployment Time: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo ""
 
     - name: Verify Deployment
       run: |
-        echo "✅ Production deployment completed!"
+        echo "✅ Production deployment completed successfully!"
         echo "🌐 Server: ${{ secrets.PROD_SERVER_HOST }}"
-        echo "📅 Time: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "⏰ Completed at: $(date '+%Y-%m-%d %H:%M:%S')"
 
-    - name: Send Notification (Optional)
+    - name: Send Notification
       if: always()
       run: |
         if [ "${{ job.status }}" == "success" ]; then
-          echo "✅ Production deployment successful!"
+          echo "✅ ================================"
+          echo "✅ DEPLOYMENT SUCCESSFUL"
+          echo "✅ ================================"
+          echo ""
+          echo "Branch: hieu/dev"
+          echo "Server: ${{ secrets.PROD_SERVER_HOST }}"
+          echo "Time: $(date '+%Y-%m-%d %H:%M:%S')"
         else
-          echo "❌ Production deployment failed!"
+          echo "❌ ================================"
+          echo "❌ DEPLOYMENT FAILED"
+          echo "❌ ================================"
+          echo ""
+          echo "Please check the logs above for details"
+          echo "You may need to rollback manually"
         fi
-
-  # ================================
-  # Job 3: Rollback (Manual trigger only)
-  # ================================
-  rollback:
-    name: Rollback Production
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
-    environment: production
-    
-    steps:
-    - name: Rollback to previous version
-      uses: appleboy/ssh-action@v1.0.0
-      with:
-        host: ${{ secrets.PROD_SERVER_HOST }}
-        username: ${{ secrets.PROD_SERVER_USER }}
-        key: ${{ secrets.SSH_PRIVATE_KEY_PROD }}
-        script: |
-          set -e
-          
-          echo "⏪ Starting rollback..."
-          
-          cd /var/www/interview-bot-prod
-          
-          # Rollback to previous commit
-          git reset --hard HEAD~1
-          
-          # Reinstall dependencies
-          yarn install --frozen-lockfile
-          
-          # Rebuild
-          yarn build
-          
-          # Restart
-          pm2 restart interview-bot-prod
-          
-          echo "✅ Rollback completed!"
-          pm2 status interview-bot-prod
