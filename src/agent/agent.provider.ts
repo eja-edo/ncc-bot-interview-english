@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { InjectQueue } from "@nestjs/bull";
+import { Queue } from "bull";
 import type { Nezon } from "@n0xgg04/nezon";
 import { EventSource } from "eventsource";
 import axios from "axios";
@@ -15,16 +16,28 @@ import { TTSProvider } from "./tts.provider";
 import { EnhancedInterviewerService } from "@/interviewer/interview.service";
 import { InterviewSessionService } from "@/interviewer/interview-session.service";
 import { MessageRole, MessageType } from "@/database-test/entities/session-message.entity";
+import { channel } from "diagnostics_channel";
+
+interface VoiceBuffer {
+  chunks: string[];
+  lastUpdateTime: number;
+  timeoutHandle: NodeJS.Timeout | null;
+  isProcessing: boolean;
+}
 
 @Injectable()
 export class AgentService {
   private readonly logger = new Logger(AgentService.name);
   private readonly sseConnections = new Map<string, EventSource>();
+  private readonly roomMessageBuffers = new Map<string, string[]>();
+  private readonly roomTimers = new Map<string, NodeJS.Timeout>();
+  private readonly BATCH_DELAY_MS = 1000;
+  private readonly BATCH_SIZE = 1;
 
   private readonly roomSessions = new Map<string, string>();
 
   constructor(
-    @InjectQueue("tts")
+    @InjectQueue("tts") private readonly ttsQueue: Queue,
     private readonly configService: ConfigService,
     private readonly axiosClient: AxiosClient,
     private readonly interviewer: EnhancedInterviewerService,
@@ -152,6 +165,9 @@ export class AgentService {
 
         es.onmessage = (event) => {
           this.logger.log(`[SSE][Room ${meeting_code}] data: ${event.data}`);
+          //this.pushSSEMessage(meeting_code, event.data);
+
+          // Check session mapping
           const sessionId = this.roomSessions.get(meeting_code);
           if (!sessionId) {
             this.logger.error(`❌ [SSE] No session mapped for room ${meeting_code}!`);
@@ -198,6 +214,7 @@ export class AgentService {
     client: Nezon.Client,
   ): Promise<void> {
     try {
+      // Clean and validate data
       const voiceText = data.trim();
 
       if (!voiceText || voiceText.length < 2) {
@@ -207,6 +224,7 @@ export class AgentService {
 
       this.logger.log(`[Voice][Room ${roomName}] Processing: "${voiceText}"`);
 
+      // Get session for this room
       const sessionId = this.roomSessions.get(roomName);
       if (!sessionId) {
         this.logger.warn(`[Voice] No session found for room ${roomName}`);
@@ -219,9 +237,11 @@ export class AgentService {
         return;
       }
 
+      // Check if first message or answer
       const userMessages = session.messages?.filter(m => m.role === MessageRole.USER) || [];
       const isFirstMessage = userMessages.length === 0;
 
+      // Save voice message to DB
       await this.sessionService.addMessage(
         session.id,
         MessageRole.USER,
@@ -232,6 +252,7 @@ export class AgentService {
 
       this.logger.log(`[Voice] Saved message to session ${session.id}`);
 
+      // Send confirmation to text channel
       const channel = client.channels.get(session.channelId);
       if (channel) {
         await channel.send({
@@ -239,6 +260,7 @@ export class AgentService {
         });
       }
 
+      // Process the answer
       await this.processUserAnswer(session, client, session.channelId);
 
     } catch (error) {
@@ -246,6 +268,9 @@ export class AgentService {
     }
   }
 
+  /**
+   * Common logic to process user's answer (from text or voice)
+   */
   async processUserAnswer(
     session: any,
     client: Nezon.Client,
@@ -254,6 +279,7 @@ export class AgentService {
     const nextQuestionNumber = session.currentQuestionIndex + 1;
     const totalQuestions = session.template.numberOfQuestions;
 
+    // Check if complete
     if (nextQuestionNumber > totalQuestions) {
       this.logger.log('Interview complete, generating feedback');
       const overallFeedback = await this.interviewer.generateOverallFeedback(
@@ -262,8 +288,12 @@ export class AgentService {
 
       await this.sessionService.completeSession(session.id, overallFeedback);
 
+      const completedSession = await this.sessionService.getSessionById(session.id);
+
+      // Send TTS completion
       const spokenCompletion = 'Congratulations! You have completed the interview. Thank you for your time joining this interview';
 
+      // Save bot's completion message
       await this.sessionService.addMessage(
         session.id,
         MessageRole.ASSISTANT,
@@ -272,6 +302,7 @@ export class AgentService {
       );
       await this.sendTTS(session.roomName, spokenCompletion);
 
+      // Completion message
       const completionMessage = `🎉 **Interview Complete!**
 
 "${spokenCompletion}"
@@ -283,6 +314,7 @@ export class AgentService {
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
 Generating detailed feedback...`;
+      // Send final feedback to text channel
       const channel = client.channels.get(channelId);
       if (channel) {
         await channel.send({ t: completionMessage });
@@ -292,6 +324,7 @@ Generating detailed feedback...`;
       return;
     }
 
+    // Generate next question
     this.logger.log(`Generating question ${nextQuestionNumber}`);
 
     const nextQuestion = await this.interviewer.generateQuestion(
@@ -299,14 +332,16 @@ Generating detailed feedback...`;
       nextQuestionNumber,
     );
 
+    // Save next question
     await this.sessionService.addMessage(
       session.id,
       MessageRole.ASSISTANT,
       nextQuestion,
-      MessageType.TEXT,
+      MessageType.TEXT, // Will be spoken via voice
       nextQuestionNumber,
     );
 
+    // Send TTS for next question
     await this.sendTTS(session.roomName, nextQuestion);
 
     const responseMessage = ` Answer recorded!
@@ -332,12 +367,78 @@ Type your answer or speak in the voice room...`;
       this.logger.error(`Channel ${channelId} not found`);
     }
   }
-  
+
+  // private pushSSEMessage(meeting_code: string, data: string): void {
+  //   if (!this.roomMessageBuffers.has(meeting_code)) {
+  //     this.roomMessageBuffers.set(meeting_code, []);
+  //   }
+
+  //   this.roomMessageBuffers.get(meeting_code)!.push(data);
+
+  //   this.scheduleRoomProcessing(meeting_code);
+  // }
+
+  // private scheduleRoomProcessing(roomName: string): void {
+  //   const existingTimer = this.roomTimers.get(roomName);
+  //   if (existingTimer) {
+  //     clearTimeout(existingTimer);
+  //   }
+
+  //   const timer = setTimeout(() => {
+  //     this.roomTimers.delete(roomName);
+  //     this.flushRoomBuffer(roomName);
+  //   }, this.BATCH_DELAY_MS);
+
+  //   this.roomTimers.set(roomName, timer);
+  // }
+
+  // private async flushRoomBuffer(roomName: string): Promise<void> {
+  //   const buffer = this.roomMessageBuffers.get(roomName);
+  //   if (!buffer || buffer.length === 0) {
+  //     return;
+  //   }
+
+  //   const messages = buffer.splice(0, this.BATCH_SIZE);
+
+  //   try {
+  //     await this.ttsQueue.add(
+  //       "process-room",
+  //       {
+  //         roomName,
+  //         messages,
+  //       },
+  //       {
+  //         attempts: 3,
+  //         backoff: {
+  //           type: "exponential",
+  //           delay: 2000,
+  //         },
+  //         removeOnComplete: true,
+  //         removeOnFail: false,
+  //       }
+  //     );
+
+  //     if (buffer.length > 0) {
+  //       this.scheduleRoomProcessing(roomName);
+  //     }
+  //   } catch (error) {
+  //     this.logger.error(
+  //       `[TTS] Error adding job to queue for room ${roomName}: ${error}`,
+  //       (error as Error)?.stack
+  //     );
+  //   }
+  // }
+  /**
+   * NEW: Link existing session to room (bot already in room)
+   */
   async linkSessionToRoom(roomName: string, sessionId: string): Promise<void> {
     this.roomSessions.set(roomName, sessionId);
     this.logger.log(`Linked session ${sessionId} to room ${roomName}`);
   }
 
+  /**
+   * NEW: Send TTS directly without going through queue
+   */
   async sendTTS(roomName: string, text: string): Promise<void> {
     try {
       await this.ttsService.callTTSAPI(roomName, text);
