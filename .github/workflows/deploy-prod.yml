@@ -1,0 +1,38 @@
+name: Deploy Interview Bot Production (Brunner)
+
+on:
+  push:
+    branches:
+      - prod
+    paths:
+      - '**'
+      - '.github/workflows/deploy-prod.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Build & Deploy on Internal Server
+    runs-on: mezon-interview-english-prod
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build application
+        run: yarn build
+
+      - name: Deploy & Restart Service
+        run: |
+            rm -rf /home/nccsoft/ncc-bot-interview-english/dist/*
+            cp -rf dist/* /home/nccsoft/ncc-bot-interview-english/dist/
+            pm2 restart mezon-interview-english-prod
