@@ -1,47 +1,27 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { ChatOpenAI } from '@langchain/openai';
-import { createAgent } from 'langchain';
-import { MemorySaver } from '@langchain/langgraph';
-import { HumanMessage, SystemMessage, BaseMessage } from '@langchain/core/messages';
+import { Injectable, Logger } from '@nestjs/common';
 import { InterviewSession } from '../database-test/entities/interview-session-test.entity';
-import { SessionMessage, MessageRole } from '../database-test/entities/session-message.entity';
+import { MessageRole } from '../database-test/entities/session-message.entity';
 import { InterviewTemplate } from '@/database-test/entities/interview-template.entity';
-import { InterviewSessionService } from './interview-session.service';
 import { AIService } from './ai.service'; 
-
-interface QuestionScoreData {
-  question: string;
-  answer: string;
-  score: number;
-  feedback: string;
-}
 
 @Injectable()
 export class EnhancedInterviewerService {
   private readonly logger = new Logger(EnhancedInterviewerService.name);
 
-  // Store template context per room
   private roomTemplates = new Map<string, InterviewTemplate>();
 
   constructor(
     private readonly aiService: AIService,
   ) {
-    // Log current AI provider
     const info = this.aiService.getProviderInfo();
     this.logger.log(`🤖 Using AI provider: ${info.provider} (${info.modelName})`);
   }
 
-  /**
-   * Set template context for a room
-   */
   async setRoomTemplate(roomName: string, template: InterviewTemplate): Promise<void> {
     this.roomTemplates.set(roomName, template);
     this.logger.log(`Set template "${template.name}" for room ${roomName}`);
   }
-  /**
-   * Generate greeting message based on template
-   */
+
   async generateGreeting(template: InterviewTemplate): Promise<string> {
     if (template.name === 'Non-AI Generate Interview') {
     return `Hello! Welcome to the Non-AI Generate Interview. I'll be asking you ${template.numberOfQuestions} pre-defined questions. Please answer each question clearly and take your time. When you're ready, type or say "ready" to begin.`;
@@ -61,28 +41,16 @@ TASK: Generate a warm, professional greeting (2-3 sentences).
 Keep it warm and encouraging.`;
 
     try {
-      // Use Gemini instead of OpenAI
       const response = await this.aiService.generateWithSystemPrompt(
         systemPrompt,
       );
-
       return response.trim();
     } catch (error) {
       this.logger.error('Error getting response:', error);
       throw error;
     }
   }
-  /**
-   * Clear template context for room
-   */
-  clearRoomTemplate(roomName: string): void {
-    this.roomTemplates.delete(roomName);
-    this.logger.log(`Cleared template for room ${roomName}`);
-  }
-
-  /**
-   * Generate next question - unified approach for all templates
-   */
+  
   async generateQuestion(
     session: InterviewSession,
     questionNumber: number,
@@ -90,19 +58,16 @@ Keep it warm and encouraging.`;
     const threadId = this.getThreadId(session);
     const isLastQuestion = questionNumber === session.template.numberOfQuestions;
 
-    // CHECK: If template is "Structured Q&A Interview", use pre-defined questions
     if (session.template.name === 'Non-AI Generate Interview') {
       return this.getPreDefinedQuestion(session, questionNumber);
     }
-    // Build recent conversation for context
+
     const recentMessages = this.buildRecentConversation(session, 10);
     const conversationContext = recentMessages.length > 0
       ? `\n\nCONVERSATION SO FAR:\n${recentMessages.map(m =>
         `${m.role === 'user' ? 'Candidate' : 'Interviewer'}: ${m.content}`
       ).join('\n')}`
-      : '';
-
-    // Unified system prompt for all templates
+      : ''
     const systemPrompt = `${session.template.systemPrompt}
 
 CURRENT STATE:
@@ -142,78 +107,6 @@ Generate question ${questionNumber} now:`;
     }
   }
 
-  /**
-  * Score answer using Gemini
-  */
-  async scoreAnswer(
-    session: InterviewSession,
-    questionNumber: number,
-    question: string,
-    answer: string,
-  ): Promise<QuestionScoreData> {
-    // Check if this template should skip scoring
-    const skipScoringTemplates = ['HR Interview Simulation', 'Non-AI Generate Interview',];
-
-    if (skipScoringTemplates.includes(session.template.name)) {
-      return {
-        question,
-        answer,
-        score: 10, // Default score, not shown to user
-        feedback: 'Response recorded.',
-      };
-    }
-
-    // Scoring prompt for other templates
-    const systemPrompt = `You are an English language assessor.
-
-TASK: Score this answer.
-
-Question ${questionNumber}: ${question}
-Answer: ${answer}
-
-Template: ${session.template.name}
-Level: ${session.template.level}
-
-Provide:
-1. Score (1-10):
-2. Feedback (2-3 sentences):
-
-Consider grammar, vocabulary, relevance, and completeness.
-Be objective but encouraging.`;
-
-    try {
-      const response = await this.aiService.generateText(systemPrompt);
-
-      // Parse score and feedback from text
-      const scoreMatch = response.match(/(?:Score|1\..*?)[\s:]*(\d+)(?:\/10)?/i);
-      const score = scoreMatch ? parseInt(scoreMatch[1]) : 7;
-
-      // Get feedback (everything after "Feedback:" or "2.")
-      const feedbackMatch = response.match(/(?:Feedback|2\.)[\s:]*(.+?)$/is);
-      const feedback = feedbackMatch
-        ? feedbackMatch[1].trim().substring(0, 200)
-        : response.substring(0, 200);
-
-      return {
-        question,
-        answer,
-        score: Math.max(1, Math.min(10, score)),
-        feedback: feedback || 'Good effort!',
-      };
-    } catch (error) {
-      this.logger.error('Error scoring answer:', error);
-
-      return {
-        question,
-        answer,
-        score: 7,
-        feedback: 'Good effort! Keep practicing to improve your skills.',
-      };
-    }
-  }
-  /**
-   * Generate overall feedback (NO per-question scoring)
-   */
   async generateOverallFeedback(
     session: InterviewSession,
   ): Promise<{
@@ -227,7 +120,7 @@ Be objective but encouraging.`;
       overall: `Thank you for completing the ${session.template.name}. All ${session.template.numberOfQuestions} questions have been answered.`,
       strengths: [],
       improvements: [],
-      totalScore: 0, // No scoring for this template
+      totalScore: 0,
     };
   }
     const conversationText = session.messages
@@ -303,9 +196,7 @@ Be specific, encouraging, and reference actual examples from their answers.`;
       };
     }
   }
-  /**
-  * Parse feedback sections from text response
-  */
+
   private parseFeedbackSections(response: string): {
     overall: string;
     strengths: string[];
@@ -338,9 +229,6 @@ Be specific, encouraging, and reference actual examples from their answers.`;
     };
   }
 
-  /**
-  * Extract numbered or bulleted list items
-  */
   private extractListItems(text: string): string[] {
     const items = text.match(/(?:^|\n)(?:\d+\.|[-*•])\s*(.+?)(?=\n(?:\d+\.|[-*•])|$)/gs);
 
@@ -362,52 +250,6 @@ Be specific, encouraging, and reference actual examples from their answers.`;
     return lines.slice(0, 4);
   }
 
-  /**
-   * Format complete feedback for display
-   */
-  formatCompleteFeedback(session: InterviewSession): string {
-    if (!session.overallFeedback) return 'No feedback available.';
-
-    let message = '📊 **Detailed Feedback Report**\n\n';
-    message += '╔══════════════════════════════════════╗\n\n';
-
-    message += `**Overall Score: ${session.overallFeedback.totalScore}/10**\n\n`;
-
-    message += '📝 **Overall Assessment:**\n';
-    message += `${session.overallFeedback.overall}\n\n`;
-
-    if (session.overallFeedback.strengths.length > 0) {
-      message += '✨ **Your Strengths:**\n';
-      session.overallFeedback.strengths.forEach((strength, i) => {
-        message += `${i + 1}. ${strength}\n`;
-      });
-      message += '\n';
-    }
-
-    if (session.overallFeedback.improvements.length > 0) {
-      message += '📈 **Areas for Improvement:**\n';
-      session.overallFeedback.improvements.forEach((improvement, i) => {
-        message += `${i + 1}. ${improvement}\n`;
-      });
-      message += '\n';
-    }
-
-    if (session.durationSeconds) {
-      const minutes = Math.floor(session.durationSeconds / 60);
-      const seconds = session.durationSeconds % 60;
-      message += `⏱️ Duration: ${minutes}m ${seconds}s\n\n`;
-    }
-
-    message += '╔══════════════════════════════════════╗\n';
-    message += 'Use `*start` to begin another interview!\n';
-    message += 'Use `*history` to see your past sessions.';
-
-    return message;
-  }
-
-  /**
-   * Get thread ID for conversation persistence
-   */
   private getThreadId(session: InterviewSession): string {
     return `session-${session.id}`;
   }
@@ -428,14 +270,10 @@ Be specific, encouraging, and reference actual examples from their answers.`;
     }));
   }
 
-  /**
- * NEW: Get pre-defined question from template (no AI generation)
- */
   private getPreDefinedQuestion(
     session: InterviewSession,
     questionNumber: number,
   ): string {
-    // Question number is 1-based, array is 0-based
     const questionIndex = questionNumber - 1;
 
     if (questionIndex >= session.template.sampleQuestions.length) {

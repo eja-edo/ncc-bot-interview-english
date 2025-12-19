@@ -22,9 +22,6 @@ export class AIService {
         this.initializeModel(provider);
     }
 
-    /**
-     * Initialize model based on provider
-     */
     private initializeModel(provider: AIProvider): void {
         this.currentProvider = provider;
 
@@ -42,9 +39,6 @@ export class AIService {
         this.logger.log(`✅ AI Service initialized with provider: ${provider}`);
     }
 
-    /**
-     * Create Gemini model via LangChain
-     */
     private createGeminiModel(): ChatGoogleGenerativeAI {
         const apiKey = this.configService.get<string>('GOOGLE_API_KEY');
 
@@ -60,9 +54,6 @@ export class AIService {
         });
     }
 
-    /**
-     * Create OpenAI model via LangChain
-     */
     private createOpenAIModel(): ChatOpenAI {
         const apiKey = this.configService.get<string>('OPENAI_API_KEY');
 
@@ -78,17 +69,11 @@ export class AIService {
         });
     }
 
-    /**
-     * Switch to different AI provider at runtime
-     */
     switchProvider(provider: AIProvider): void {
         this.logger.log(`🔄 Switching AI provider from ${this.currentProvider} to ${provider}`);
         this.initializeModel(provider);
     }
 
-    /**
-     * Generate text from simple prompt
-     */
     async generateText(prompt: string): Promise<string> {
         try {
             const messages = [new HumanMessage(prompt)];
@@ -100,9 +85,6 @@ export class AIService {
         }
     }
 
-    /**
-     * Generate with system prompt
-     */
     async generateWithSystemPrompt(systemPrompt: string, userPrompt?: string): Promise<string> {
         try {
             const messages = [
@@ -118,9 +100,6 @@ export class AIService {
         }
     }
 
-    /**
-     * Chat with conversation history
-     */
     async chat(messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>): Promise<string> {
         try {
             const langchainMessages = messages.map(msg => {
@@ -144,9 +123,6 @@ export class AIService {
         }
     }
 
-    /**
-     * Stream response (for real-time updates)
-     */
     async *streamText(prompt: string): AsyncGenerator<string> {
         try {
             const messages = [new HumanMessage(prompt)];
@@ -164,9 +140,6 @@ export class AIService {
         }
     }
 
-    /**
-     * Get current provider info
-     */
     getProviderInfo(): { provider: AIProvider; modelName: string } {
         return {
             provider: this.currentProvider,

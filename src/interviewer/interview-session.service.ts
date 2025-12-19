@@ -1,6 +1,6 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { InterviewSession, SessionStatus, SessionMode } from '../database-test/entities/interview-session-test.entity';
 import { SessionMessage, MessageRole, MessageType } from '../database-test/entities/session-message.entity';
 import { TemplateService } from './template.service';
@@ -239,6 +239,45 @@ export class InterviewSessionService {
     });
 
     return message;
+  }
+
+  async findSessionByUserAndRoom(
+    userId: string,
+    roomName: string,
+  ): Promise<InterviewSession | null> {
+    return this.sessionRepo.findOne({
+      where: {
+        userId,
+        roomName,
+        status: In([SessionStatus.IN_PROGRESS, SessionStatus.COMPLETED, SessionStatus.PENDING]),
+      },
+      relations: ['template', 'user', 'messages'],
+      order: {
+        startedAt: 'DESC', // Get most recent session
+      },
+    });
+  }
+
+  async cancelSession2(sessionId: string): Promise<void> {
+    const session = await this.sessionRepo.findOne({
+      where: { id: sessionId },
+    });
+
+    if (session && session.status === SessionStatus.IN_PROGRESS) {
+      session.status = SessionStatus.CANCELLED;
+      session.completedAt = new Date();
+      
+      // Calculate duration
+      if (session.startedAt) {
+        const duration = Math.floor(
+          (new Date().getTime() - new Date(session.startedAt).getTime()) / 1000
+        );
+        session.durationSeconds = duration;
+      }
+
+      await this.sessionRepo.save(session);
+      this.logger.log(`Cancelled session ${session.id}`);
+    }
   }
   
 }
