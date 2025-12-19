@@ -9,7 +9,6 @@ import { Account } from "@/agent/agent.type";
 import { TTSProvider } from "./tts.provider";
 import { EnhancedInterviewerService } from "@/interviewer/interview.service";
 import { InterviewSessionService } from "@/interviewer/interview-session.service";
-import { MessageRole, MessageType } from "@/database-test/entities/session-message.entity";
 //import { InterviewerService } from "@/interviewer/interviewer.service";
 
 interface TTSJobData {
