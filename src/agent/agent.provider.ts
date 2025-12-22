@@ -16,7 +16,6 @@ import { TTSProvider } from "./tts.provider";
 import { EnhancedInterviewerService } from "@/interviewer/interview.service";
 import { InterviewSessionService } from "@/interviewer/interview-session.service";
 import { MessageRole, MessageType } from "@/database-test/entities/session-message.entity";
-import { channel } from "diagnostics_channel";
 
 interface VoiceBuffer {
   chunks: string[];
@@ -29,12 +28,14 @@ interface VoiceBuffer {
 export class AgentService {
   private readonly logger = new Logger(AgentService.name);
   private readonly sseConnections = new Map<string, EventSource>();
-  private readonly roomMessageBuffers = new Map<string, string[]>();
-  private readonly roomTimers = new Map<string, NodeJS.Timeout>();
-  private readonly BATCH_DELAY_MS = 1000;
-  private readonly BATCH_SIZE = 1;
-
   private readonly roomSessions = new Map<string, string>();
+
+  // Cache sessions để tránh load lại nhiều lần
+  private readonly sessionCache = new Map<string, { 
+    data: any, 
+    timestamp: number 
+  }>();
+  private readonly CACHE_TTL_MS = 30000;
 
   constructor(
     @InjectQueue("tts") private readonly ttsQueue: Queue,
@@ -86,6 +87,8 @@ export class AgentService {
       if (this.roomSessions.has(meeting_code)) {
         const sessionId = this.roomSessions.get(meeting_code);
         this.roomSessions.delete(meeting_code);
+        // Clear cache when removing session
+        this.sessionCache.delete(sessionId!);
         this.logger.log(`🗑️ Cleared session ${sessionId} mapping for room ${meeting_code}`);
       }
     } catch (error) {
@@ -208,6 +211,39 @@ export class AgentService {
     }
   }
 
+  /**
+   * OPTIMIZED: Get cached session hoặc load từ DB
+   */
+  private async getCachedSession(sessionId: string, forceRefresh = false): Promise<any> {
+    const cached = this.sessionCache.get(sessionId);
+    const now = Date.now();
+
+    // Return cache nếu còn fresh và không force refresh
+    if (!forceRefresh && cached && (now - cached.timestamp) < this.CACHE_TTL_MS) {
+      this.logger.debug(`Cache hit for session ${sessionId}`);
+      return cached.data;
+    }
+
+    // Load từ DB
+    const session = await this.sessionService.getSessionById(sessionId);
+    if (session) {
+      this.sessionCache.set(sessionId, {
+        data: session,
+        timestamp: now
+      });
+      this.logger.debug(`Cache refreshed for session ${sessionId}`);
+    }
+
+    return session;
+  }
+
+  /**
+   * OPTIMIZED: Clear cache sau khi update
+   */
+  private clearSessionCache(sessionId: string): void {
+    this.sessionCache.delete(sessionId);
+  }
+
   private async handleVoiceMessage(
     roomName: string,
     data: string,
@@ -231,7 +267,7 @@ export class AgentService {
         return;
       }
 
-      const session = await this.sessionService.getSessionById(sessionId);
+      const session = await this.getCachedSession(sessionId);
       if (!session) {
         this.logger.warn(`[Voice] Session ${sessionId} not found`);
         return;
@@ -250,6 +286,8 @@ export class AgentService {
         isFirstMessage ? undefined : session.currentQuestionIndex,
       );
 
+      this.clearSessionCache(sessionId);
+
       this.logger.log(`[Voice] Saved message to session ${session.id}`);
 
       // Send confirmation to text channel
@@ -261,7 +299,7 @@ export class AgentService {
       }
 
       // Process the answer
-      await this.processUserAnswer(session, client, session.channelId);
+      await this.processUserAnswer(sessionId, client, session.channelId);
 
     } catch (error) {
       this.logger.error(`[Voice] Error processing message:`, error);
@@ -272,23 +310,30 @@ export class AgentService {
    * Common logic to process user's answer (from text or voice)
    */
   async processUserAnswer(
-    session: any,
+    sessionId: string,
     client: Nezon.Client,
     channelId: string,
   ): Promise<void> {
+
+    // Load fresh session with cache
+    const session = await this.getCachedSession(sessionId, true); // Force refresh
+
     const nextQuestionNumber = session.currentQuestionIndex + 1;
     const totalQuestions = session.template.numberOfQuestions;
 
     // Check if complete
     if (nextQuestionNumber > totalQuestions) {
       this.logger.log('Interview complete, generating feedback');
+
+      const sessionForFeedback = await this.getCachedSession(sessionId, true);
       const overallFeedback = await this.interviewer.generateOverallFeedback(
-        await this.sessionService.getSessionById(session.id),
+        sessionForFeedback
       );
 
       await this.sessionService.completeSession(session.id, overallFeedback);
+      this.clearSessionCache(sessionId);
 
-      const completedSession = await this.sessionService.getSessionById(session.id);
+      const completedSession = await this.getCachedSession(sessionId, true);
 
       // Send TTS completion
       const spokenCompletion = 'Congratulations! You have completed the interview. Thank you for your time joining this interview';
@@ -300,6 +345,9 @@ export class AgentService {
         spokenCompletion,
         MessageType.TEXT,
       );
+
+      this.clearSessionCache(sessionId);
+
       await this.sendTTS(session.roomName, spokenCompletion);
 
       // Completion message
@@ -327,8 +375,10 @@ Generating detailed feedback...`;
     // Generate next question
     this.logger.log(`Generating question ${nextQuestionNumber}`);
 
+    // OPTIMIZED: Load session một lần cho question generation
+    const sessionForQuestion = await this.getCachedSession(sessionId, true);
     const nextQuestion = await this.interviewer.generateQuestion(
-      await this.sessionService.getSessionById(session.id),
+      sessionForQuestion,
       nextQuestionNumber,
     );
 
@@ -337,9 +387,11 @@ Generating detailed feedback...`;
       session.id,
       MessageRole.ASSISTANT,
       nextQuestion,
-      MessageType.TEXT, // Will be spoken via voice
+      MessageType.TEXT,
       nextQuestionNumber,
     );
+
+    this.clearSessionCache(sessionId);
 
     // Send TTS for next question
     await this.sendTTS(session.roomName, nextQuestion);
@@ -451,5 +503,21 @@ Type your answer or speak in the voice room...`;
 
   getSessionIdForRoom(roomName: string): string | undefined {
     return this.roomSessions.get(roomName);
+  }
+  
+  clearExpiredCache(): void {
+    const now = Date.now();
+    let cleared = 0;
+
+    for (const [sessionId, cached] of this.sessionCache.entries()) {
+      if (now - cached.timestamp > this.CACHE_TTL_MS) {
+        this.sessionCache.delete(sessionId);
+        cleared++;
+      }
+    }
+
+    if (cleared > 0) {
+      this.logger.debug(`Cleared ${cleared} expired cache entries`);
+    }
   }
 }

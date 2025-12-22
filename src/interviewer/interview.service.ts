@@ -55,19 +55,21 @@ Keep it warm and encouraging.`;
     session: InterviewSession,
     questionNumber: number,
   ): Promise<string> {
-    const threadId = this.getThreadId(session);
     const isLastQuestion = questionNumber === session.template.numberOfQuestions;
 
     if (session.template.name === 'Non-AI Generate Interview') {
       return this.getPreDefinedQuestion(session, questionNumber);
     }
 
+    // OPTIMIZED: Chỉ lấy recent messages thay vì load toàn bộ
     const recentMessages = this.buildRecentConversation(session, 10);
+    
     const conversationContext = recentMessages.length > 0
       ? `\n\nCONVERSATION SO FAR:\n${recentMessages.map(m =>
         `${m.role === 'user' ? 'Candidate' : 'Interviewer'}: ${m.content}`
       ).join('\n')}`
-      : ''
+      : '';
+
     const systemPrompt = `${session.template.systemPrompt}
 
 CURRENT STATE:
@@ -123,9 +125,17 @@ Generate question ${questionNumber} now:`;
       totalScore: 0,
     };
   }
-    const conversationText = session.messages
+    // OPTIMIZED: Chỉ lấy messages cần thiết (không load toàn bộ)
+    const messages = session.messages || [];
+    
+    // Limit conversation text để tránh quá dài
+    const conversationText = messages
+      .slice(-20) // Chỉ lấy 20 messages gần nhất
       .map((msg) => `${msg.role === MessageRole.USER ? 'Candidate' : 'Interviewer'}: ${msg.content}`)
       .join('\n\n');
+
+    // OPTIMIZED: Truncate sớm để tiết kiệm memory
+    const truncatedConversation = conversationText.substring(0, 4000);
 
     const systemPrompt = `You are an English language assessor providing comprehensive feedback.
 
@@ -136,7 +146,7 @@ INTERVIEW DETAILS:
 - Questions: ${session.template.numberOfQuestions}
 
 FULL CONVERSATION:
-${conversationText.substring(0, 4000)} ${conversationText.length > 4000 ? '...(truncated)' : ''}
+${truncatedConversation}${conversationText.length > 4000 ? '...(truncated)' : ''}
 
 TASK: Provide comprehensive feedback with these sections:
 
@@ -250,10 +260,6 @@ Be specific, encouraging, and reference actual examples from their answers.`;
     return lines.slice(0, 4);
   }
 
-  private getThreadId(session: InterviewSession): string {
-    return `session-${session.id}`;
-  }
-
   private buildRecentConversation(
     session: InterviewSession,
     limit: number = 6,
@@ -262,6 +268,7 @@ Be specific, encouraging, and reference actual examples from their answers.`;
       return [];
     }
 
+    // OPTIMIZED: Slice từ messages đã có, không query lại
     const recentMessages = session.messages.slice(-limit);
 
     return recentMessages.map((msg) => ({
