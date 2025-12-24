@@ -355,6 +355,7 @@ ${nextQuestion}
         return;
       }
 
+      const account = this.getAccount();
       const selectedTemplateId = formData?.template;
 
       if (!selectedTemplateId) {
@@ -379,8 +380,6 @@ ${nextQuestion}
       }
 
       const roomName = channel.meeting_code;
-      const clanId = channel.clan.id || '';
-      const messageId = payload.message_id;
 
       this.logger.log(` Starting interview for user ${userId}, template: ${template.name}`);
 
@@ -403,14 +402,6 @@ ${nextQuestion}
 
       this.logger.log(` Session ${session.id} created`);
 
-      // 2. Save interview room info (clanId, channelId, messageId)
-      // await this.sessionService.saveInterviewRoomInfo(
-      //   session.id,
-      //   clanId,
-      //   channelId,
-      //   messageId,
-      // );
-
       await this.sessionService.startSession(session.id);
       this.logger.log(` Session ${session.id} started`);
 
@@ -424,7 +415,6 @@ ${nextQuestion}
       const linkedSessionId = this.agentService.getSessionIdForRoom(roomName);
       this.logger.log(`🔗 Verified: Room ${roomName} linked to session ${linkedSessionId}`);
 
-      const account = this.getAccount();
       const existingSessionId = this.agentService.getSessionIdForRoom(roomName);
       const botAlreadyInRoom = existingSessionId !== undefined && existingSessionId !== session.id;
 

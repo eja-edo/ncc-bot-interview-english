@@ -31,9 +31,9 @@ export class AgentService {
   private readonly roomSessions = new Map<string, string>();
 
   // Cache sessions để tránh load lại nhiều lần
-  private readonly sessionCache = new Map<string, { 
-    data: any, 
-    timestamp: number 
+  private readonly sessionCache = new Map<string, {
+    data: any,
+    timestamp: number
   }>();
   private readonly CACHE_TTL_MS = 30000;
 
@@ -150,6 +150,7 @@ export class AgentService {
           account.token,
           meeting_code
         );
+        this.logger.log(`🔗 SSE URL: ${sseUrl}`);
 
         const sseKey = `${account.appid}-${meeting_code}`;
         const existingSSE = this.sseConnections.get(sseKey);
@@ -182,12 +183,12 @@ export class AgentService {
           this.handleVoiceMessage(meeting_code, event.data, client);
         };
 
-        es.onerror = (error: Event) => {
+        es.onerror = (err: any) => {
           this.logger.error(
-            `[SSE][Room ${meeting_code}] error:`,
-            error.type,
-            error.target ? JSON.stringify(error.target) : "unknown"
+            `[SSE][Room ${meeting_code}] error`,
+            JSON.stringify(err),
           );
+
 
           if (es.readyState === EventSource.CLOSED) {
             this.logger.warn(
@@ -419,67 +420,6 @@ Type your answer or speak in the voice room...`;
       this.logger.error(`Channel ${channelId} not found`);
     }
   }
-
-  // private pushSSEMessage(meeting_code: string, data: string): void {
-  //   if (!this.roomMessageBuffers.has(meeting_code)) {
-  //     this.roomMessageBuffers.set(meeting_code, []);
-  //   }
-
-  //   this.roomMessageBuffers.get(meeting_code)!.push(data);
-
-  //   this.scheduleRoomProcessing(meeting_code);
-  // }
-
-  // private scheduleRoomProcessing(roomName: string): void {
-  //   const existingTimer = this.roomTimers.get(roomName);
-  //   if (existingTimer) {
-  //     clearTimeout(existingTimer);
-  //   }
-
-  //   const timer = setTimeout(() => {
-  //     this.roomTimers.delete(roomName);
-  //     this.flushRoomBuffer(roomName);
-  //   }, this.BATCH_DELAY_MS);
-
-  //   this.roomTimers.set(roomName, timer);
-  // }
-
-  // private async flushRoomBuffer(roomName: string): Promise<void> {
-  //   const buffer = this.roomMessageBuffers.get(roomName);
-  //   if (!buffer || buffer.length === 0) {
-  //     return;
-  //   }
-
-  //   const messages = buffer.splice(0, this.BATCH_SIZE);
-
-  //   try {
-  //     await this.ttsQueue.add(
-  //       "process-room",
-  //       {
-  //         roomName,
-  //         messages,
-  //       },
-  //       {
-  //         attempts: 3,
-  //         backoff: {
-  //           type: "exponential",
-  //           delay: 2000,
-  //         },
-  //         removeOnComplete: true,
-  //         removeOnFail: false,
-  //       }
-  //     );
-
-  //     if (buffer.length > 0) {
-  //       this.scheduleRoomProcessing(roomName);
-  //     }
-  //   } catch (error) {
-  //     this.logger.error(
-  //       `[TTS] Error adding job to queue for room ${roomName}: ${error}`,
-  //       (error as Error)?.stack
-  //     );
-  //   }
-  // }
   /**
    * NEW: Link existing session to room (bot already in room)
    */
@@ -504,7 +444,7 @@ Type your answer or speak in the voice room...`;
   getSessionIdForRoom(roomName: string): string | undefined {
     return this.roomSessions.get(roomName);
   }
-  
+
   clearExpiredCache(): void {
     const now = Date.now();
     let cleared = 0;

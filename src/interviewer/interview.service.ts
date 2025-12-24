@@ -283,17 +283,20 @@ Be specific, encouraging, and reference actual examples from their answers.`;
   ): string {
     const questionIndex = questionNumber - 1;
 
-    if (questionIndex >= session.template.sampleQuestions.length) {
+    // Use selectedQuestions if available (for randomized Non-AI template)
+    const questions = session.selectedQuestions || session.template.sampleQuestions;
+
+    if (questionIndex >= questions.length) {
       this.logger.warn(
-        `Question ${questionNumber} exceeds available questions (${session.template.sampleQuestions.length})`
+        `Question ${questionNumber} exceeds available questions (${questions.length})`
       );
       return 'Thank you for your answers so far. This concludes our interview.';
     }
 
-    const question = session.template.sampleQuestions[questionIndex];
+    const question = questions[questionIndex];
 
     this.logger.log(
-      `Using pre-defined question ${questionNumber}: "${question.substring(0, 50)}..."`
+      `Using pre-defined question ${questionNumber}/${questions.length}: "${question.substring(0, 50)}..."`
     );
 
     return question;

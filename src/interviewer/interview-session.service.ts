@@ -44,6 +44,15 @@ export class InterviewSessionService {
       );
     }
 
+    let selectedQuestions: string[] | null = null;
+    if (template.name === 'Non-AI Generate Interview') {
+      selectedQuestions = this.randomSelectQuestions(
+        template.sampleQuestions,
+        template.numberOfQuestions
+      );
+      this.logger.log(`Selected ${selectedQuestions.length} random questions for Non-AI template`);
+    }
+
     // Create session
     const session = this.sessionRepo.create({
       userId: user.mezonUserId,
@@ -56,6 +65,7 @@ export class InterviewSessionService {
       currentQuestionIndex: 0,
       questionScores: [],
       audioFilePaths: [],
+      selectedQuestions,
     });
 
     const savedSession = await this.sessionRepo.save(session);
@@ -65,13 +75,39 @@ export class InterviewSessionService {
     return this.getSessionById(savedSession.id);
   }
 
+  private randomSelectQuestions(questionPool: string[], count: number): string[] {
+    if (questionPool.length < count) {
+      this.logger.warn(
+        `Question pool size (${questionPool.length}) is less than required count (${count})`
+      );
+      return questionPool;
+    }
+
+    // First question is ALWAYS the introduction question (index 0)
+    const selected: string[] = [questionPool[0]];
+
+    // Create pool of remaining questions (excluding index 0)
+    const remainingQuestions = questionPool.slice(1);
+
+    // Randomly select (count - 1) questions from remaining pool
+    const shuffled = [...remainingQuestions].sort(() => Math.random() - 0.5);
+    selected.push(...shuffled.slice(0, count - 1));
+
+    this.logger.debug(`Selected questions: 
+      1. ${selected[0].substring(0, 50)}... (FIXED)
+      ${selected.slice(1).map((q, i) => `${i + 2}. ${q.substring(0, 50)}...`).join('\n      ')}
+    `);
+
+    return selected;
+  }
+
   /**
    * Get session by ID with all relations
    */
   async getSessionById(sessionId: string): Promise<InterviewSession | null> {
     return this.sessionRepo.findOne({
       where: { id: sessionId },
-      relations: ['template', 'user', 'messages'],
+      relations: ['template'],
     });
   }
 
@@ -85,7 +121,7 @@ export class InterviewSessionService {
         channelId,
         status: SessionStatus.IN_PROGRESS,
       },
-      relations: ['template', 'user', 'messages'],
+      relations: ['template', 'user'],
     });
   }
 
@@ -117,7 +153,7 @@ export class InterviewSessionService {
     audioFilePath?: string,
   ): Promise<SessionMessage> {
     // Verify session exists first
-    const session = await this.sessionRepo.findOne({
+    const session = await this.sessionRepo.exists({
       where: { id: sessionId },
     });
 
@@ -127,7 +163,7 @@ export class InterviewSessionService {
 
     // Create message with explicit sessionId
     const message = this.messageRepo.create({
-      sessionId: session.id, // Explicitly set sessionId
+      sessionId, // Explicitly set sessionId
       role,
       type,
       content,
@@ -139,8 +175,10 @@ export class InterviewSessionService {
 
     // Increment question index if assistant message with question number
     if (role === MessageRole.ASSISTANT && questionNumber) {
-      session.currentQuestionIndex = questionNumber;
-      await this.sessionRepo.save(session);
+      await this.sessionRepo.update(
+        { id: sessionId },
+        { currentQuestionIndex: questionNumber }
+      );
     }
 
     this.logger.log(`Added message to session ${sessionId}, role: ${role}`);
@@ -156,6 +194,7 @@ export class InterviewSessionService {
   ): Promise<InterviewSession> {
     const session = await this.sessionRepo.findOne({
       where: { id: sessionId },
+      select: ['id', 'startedAt'],
     });
 
     if (!session) {
@@ -166,23 +205,34 @@ export class InterviewSessionService {
       (new Date().getTime() - new Date(session.startedAt).getTime()) / 1000
     );
 
-    session.status = SessionStatus.COMPLETED;
-    session.completedAt = new Date();
-    session.overallFeedback = overallFeedback;
-    session.durationSeconds = duration;
-
-    await this.sessionRepo.save(session);
+    await this.sessionRepo.update(
+      { id: sessionId },
+      {
+        status: SessionStatus.COMPLETED,
+        completedAt: new Date(),
+        overallFeedback,
+        durationSeconds: duration,
+      }
+    );
     this.logger.log(`Completed session ${sessionId}`);
 
     return this.getSessionById(sessionId);
   }
 
   async cancelSession(userId: string, channelId: string): Promise<void> {
-    const session = await this.getActiveSession(userId, channelId);
-    if (session) {
-      session.status = SessionStatus.CANCELLED;
-      await this.sessionRepo.save(session);
-      this.logger.log(`Cancelled session ${session.id}`);
+    const result = await this.sessionRepo.update(
+      {
+        userId,
+        channelId,
+        status: SessionStatus.IN_PROGRESS,
+      },
+      {
+        status: SessionStatus.CANCELLED,
+      }
+    );
+
+    if (result.affected && result.affected > 0) {
+      this.logger.log(`Cancelled session for user ${userId} in channel ${channelId}`);
     }
   }
 
@@ -251,7 +301,7 @@ export class InterviewSessionService {
         roomName,
         status: In([SessionStatus.IN_PROGRESS, SessionStatus.COMPLETED, SessionStatus.PENDING]),
       },
-      relations: ['template', 'user', 'messages'],
+      relations: ['template'],
       order: {
         startedAt: 'DESC', // Get most recent session
       },
@@ -261,6 +311,7 @@ export class InterviewSessionService {
   async cancelSession2(sessionId: string): Promise<void> {
     const session = await this.sessionRepo.findOne({
       where: { id: sessionId },
+      select: ['id', 'status', 'startedAt'],
     });
 
     if (session && session.status === SessionStatus.IN_PROGRESS) {
@@ -279,5 +330,4 @@ export class InterviewSessionService {
       this.logger.log(`Cancelled session ${session.id}`);
     }
   }
-  
 }
