@@ -80,6 +80,9 @@ export class InterviewSession {
     feedback: string;
   }[];
 
+   @Column('jsonb', { nullable: true })
+  selectedQuestions: string[];
+
   // Audio file paths
   @Column('simple-array', { nullable: true })
   audioFilePaths: string[];

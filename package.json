@@ -23,7 +23,7 @@
     "test:scenarios": "ts-node src/test/test-scenarios.ts",
     "migration:generate": "npm run typeorm -- migration:generate src/database-test/migrations/UpdateTestDB",
     "migration:run": "npm run typeorm -- migration:run",
-    "migration:create": "npm run typeorm -- migration:create src/database-test/migrations/NewMigration"
+    "migration:create": "typeorm-ts-node-commonjs migration:create src/database-test/migrations/NewMigration"
   },
   "dependencies": {
     "@bull-board/api": "^6.14.2",
