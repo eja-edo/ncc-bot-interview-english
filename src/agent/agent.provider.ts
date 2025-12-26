@@ -157,7 +157,6 @@ export class AgentService {
         if (existingSSE) {
           this.logger.log(`🔌 Closing existing SSE connection for room ${meeting_code}`);
           existingSSE.close();
-          this.sseConnections.delete(sseKey);
         }
 
         this.logger.log(`🔌 Creating NEW SSE connection for room ${meeting_code}`);
@@ -333,8 +332,6 @@ export class AgentService {
 
       await this.sessionService.completeSession(session.id, overallFeedback);
       this.clearSessionCache(sessionId);
-
-      const completedSession = await this.getCachedSession(sessionId, true);
 
       // Send TTS completion
       const spokenCompletion = 'Congratulations! You have completed the interview. Thank you for your time joining this interview';

@@ -95,7 +95,7 @@ INSTRUCTIONS FOR QUESTION ${questionNumber}:
 CRITICAL:
 - Ask ONLY the question itself
 - Do NOT provide answers or commentary
-- Make it feel conversational, not robotic
+- Make it feel conversational, natural, not robotic
 - Be warm and professional
 
 Generate question ${questionNumber} now:`;
