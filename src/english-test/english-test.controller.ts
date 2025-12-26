@@ -24,7 +24,6 @@ import { InterviewSessionService } from '../interviewer/interview-session.servic
 import { EnhancedInterviewerService } from '../interviewer/interview.service';
 import { SessionMode, SessionStatus } from '../database-test/entities/interview-session-test.entity';
 import { MessageRole, MessageType } from '../database-test/entities/session-message.entity';
-import { INTERVIEW_QUESTION_OPTIONS } from "@/shared/constants/interview";
 
 @Injectable()
 export class EnglishTestController {
