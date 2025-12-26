@@ -24,6 +24,7 @@ import { InterviewSessionService } from '../interviewer/interview-session.servic
 import { EnhancedInterviewerService } from '../interviewer/interview.service';
 import { SessionMode, SessionStatus } from '../database-test/entities/interview-session-test.entity';
 import { MessageRole, MessageType } from '../database-test/entities/session-message.entity';
+import { INTERVIEW_QUESTION_OPTIONS } from "@/shared/constants/interview";
 
 @Injectable()
 export class EnglishTestController {
@@ -167,8 +168,6 @@ export class EnglishTestController {
 
       await this.sessionService.completeSession(session.id, overallFeedback);
 
-      const completedSession = await this.sessionService.getSessionById(session.id);
-
       const spokenCompletion = 'Congratulations! You have completed the interview. Thank you for your time joining this interview';
 
       await this.sessionService.addMessage(
@@ -244,103 +243,6 @@ ${nextQuestion}
     }
   }
 
-  @Command('cancel')
-  async cancelInterview(
-    @AutoContext() [message]: Nezon.AutoContext,
-    @Client() client: Nezon.Client,
-    @ChannelMessagePayload() payload?: Nezon.ChannelMessage,
-  ) {
-    try {
-      const userId = payload?.sender_id;
-      const channelId = payload?.channel_id || message.channelId;
-
-      if (!userId || !channelId) {
-        await message.reply(
-          SmartMessage.system('Cannot determine user or channel.')
-        );
-        return;
-      }
-
-      // Get active session first
-      const session = await this.sessionService.getActiveSession(userId, channelId);
-
-      if (!session) {
-        await message.reply(
-          SmartMessage.system('⚠️ No active interview to cancel.')
-        );
-        return;
-      }
-      const roomName = session.roomName;
-
-      await this.sessionService.cancelSession(userId, channelId);
-      this.logger.log(`✅ Session ${session.id} cancelled`);
-
-      await this.agentService.handleRemoveAgent(
-        client,
-        { channel_id: channelId },
-        this.getAccount(),
-      );
-      this.logger.log(`✅ Bot removed from room ${roomName}`);
-      await message.reply(
-        SmartMessage.system(' Interview cancelled. Use *start to begin a new interview.')
-      );
-    } catch (error) {
-      this.logger.error('Error cancelling interview:', error);
-      await message.reply(
-        SmartMessage.system('Failed to cancel interview.')
-      );
-    }
-  }
-
-  @Command('history')
-  async showHistory(
-    @AutoContext() [message]: Nezon.AutoContext,
-    @ChannelMessagePayload() payload?: Nezon.ChannelMessage,
-  ) {
-    try {
-      const userId = payload?.sender_id;
-
-      if (!userId) {
-        await message.reply(
-          SmartMessage.system('Cannot determine user.')
-        );
-        return;
-      }
-
-      const sessions = await this.sessionService.getUserSessions(userId);
-      const formattedHistory = this.sessionService.formatSessionHistory(sessions);
-
-      await message.reply(SmartMessage.system(formattedHistory));
-    } catch (error) {
-      this.logger.error('Error showing history:', error);
-      await message.reply(
-        SmartMessage.system('Failed to load history.')
-      );
-    }
-  }
-  // @On(Events.VoiceLeavedEvent)
-  // async onVoiceLeaved(
-  //   @EventPayload() event: Nezon.VoiceLeavedPayload,
-  //   @Client() client: Nezon.Client
-  // ) {
-  //   try {
-  //     this.logger.log("Voice leaved event:", event);
-  //     const account = this.getAccount();
-
-  //     await this.agentService.handleRemoveAgent(
-  //       client,
-  //       { voice_channel_id: event.voice_channel_id },
-  //       account
-  //     );
-  //   } catch (error) {
-  //     this.logger.error("Error handling voice leaved event:", error);
-  //   }
-  // }
-
-  /**
-   * Handle Start Interview button click
-   * This is where we create session and invite bot
-   */
   @Component({ pattern: '/interview/start/:user_id' })
   async onStartInterview(
     @ComponentParams('user_id') userId: string | undefined,
@@ -412,9 +314,6 @@ ${nextQuestion}
       await this.agentService.linkSessionToRoom(roomName, session.id);
       await this.interviewerService.setRoomTemplate(roomName, template);
 
-      const linkedSessionId = this.agentService.getSessionIdForRoom(roomName);
-      this.logger.log(`🔗 Verified: Room ${roomName} linked to session ${linkedSessionId}`);
-
       const existingSessionId = this.agentService.getSessionIdForRoom(roomName);
       const botAlreadyInRoom = existingSessionId !== undefined && existingSessionId !== session.id;
 
@@ -453,10 +352,10 @@ ${nextQuestion}
         this.logger.log(`🔊 TTS sent successfully to room ${roomName}`);
       } catch (error) {
         this.logger.error(`❌ Failed to send TTS:`, error);
-        
+
       }
 
-      
+
       await message.update(
         SmartMessage.text(
           ` **Interview Started!**\n\n` +
@@ -491,26 +390,26 @@ ${nextQuestion}
   ) {
     try {
       this.logger.log(`👋 User left voice channel: ${event.voice_channel_id}`);
-      
-      
+
+
       const userId = event.voice_user_id;
       const voiceChannelId = event.voice_channel_id;
-      
+
       if (!userId || !voiceChannelId) {
         this.logger.warn('Missing userId or voiceChannelId in leave event');
         return;
       }
 
-      
+
       const channel = await client.channels.fetch(voiceChannelId);
-      
+
       if (!channel?.meeting_code) {
         this.logger.warn('Channel or meeting_code not found');
         return;
       }
 
       const roomName = channel.meeting_code;
-      
+
       this.logger.log(`👤 User ${userId} left room ${roomName}`);
 
       const session = await this.sessionService.findSessionByUserAndRoom(
@@ -520,7 +419,7 @@ ${nextQuestion}
 
       if (!session) {
         this.logger.log(`No active session found for user ${userId} in room ${roomName}`);
-        
+
         await this.kickBotFromRoom(client, voiceChannelId, roomName);
         return;
       }
@@ -530,14 +429,14 @@ ${nextQuestion}
       if (session.status === SessionStatus.IN_PROGRESS) {
         await this.sessionService.cancelSession2(session.id);
         this.logger.log(`❌ Session ${session.id} cancelled (was in progress)`);
-        
+
         const textChannel = client.channels.get(session.channelId);
         if (textChannel) {
           await textChannel.send({
             t: '👋 **Interview Cancelled**\n\n' +
-               'You left the voice channel.\n' +
-               'Session has been cancelled.\n\n' +
-               'Use `*start` to begin a new interview.',
+              'You left the voice channel.\n' +
+              'Session has been cancelled.\n\n' +
+              'Use `*start` to begin a new interview.',
           });
         }
       } else if (session.status === SessionStatus.COMPLETED) {
@@ -545,10 +444,6 @@ ${nextQuestion}
       } else {
         this.logger.log(`ℹ️ Session ${session.id} status: ${session.status} (no action)`);
       }
-
-      // ================================
-      // Always kick bot from room
-      // ================================
       await this.kickBotFromRoom(client, voiceChannelId, roomName);
 
     } catch (error) {
@@ -566,7 +461,7 @@ ${nextQuestion}
 
       await this.agentService.handleRemoveAgent(
         client,
-        { 
+        {
           voice_channel_id: channelId,
           channel_id: channelId,
         },
@@ -576,6 +471,33 @@ ${nextQuestion}
       this.logger.log(`✅ Bot removed from room ${roomName}`);
     } catch (error) {
       this.logger.error(`❌ Failed to kick bot from room ${roomName}:`, error);
+    }
+  }
+
+  @Component({ pattern: '/interview/cancel/:user_id' })
+  async onCancelInterview(
+    @ComponentParams('user_id') userId: string | undefined,
+    @ChannelMessagePayload() payload: Nezon.ChannelMessage,
+    @AutoContext() [message]: Nezon.AutoContext,
+  ) {
+    try {
+      if (!userId) {
+        await message.reply(SmartMessage.text('❌ Invalid request'));
+        return;
+      }
+
+      // Update message để xóa form và hiển thị thông báo
+      await message.update(
+        SmartMessage.text('❌ **Interview selection cancelled.**\n\nUse `*start` to begin again.')
+      );
+
+      this.logger.log(`🚫 User ${userId} cancelled template selection`);
+
+    } catch (error) {
+      this.logger.error('Error cancelling interview selection:', error);
+      await message.update(
+        SmartMessage.text('❌ Failed to cancel selection.')
+      );
     }
   }
 }
