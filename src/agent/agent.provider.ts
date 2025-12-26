@@ -157,46 +157,10 @@ export class AgentService {
         if (existingSSE) {
           this.logger.log(`🔌 Closing existing SSE connection for room ${meeting_code}`);
           existingSSE.close();
+          this.sseConnections.delete(sseKey);
         }
 
-        this.logger.log(`🔌 Creating NEW SSE connection for room ${meeting_code}`);
-        const es = new EventSource(sseUrl);
-
-        es.onopen = () => {
-          this.logger.log(`✅ SSE connection OPENED for room ${meeting_code}`);
-        };
-
-        es.onmessage = (event) => {
-          this.logger.log(`[SSE][Room ${meeting_code}] data: ${event.data}`);
-          //this.pushSSEMessage(meeting_code, event.data);
-
-          // Check session mapping
-          const sessionId = this.roomSessions.get(meeting_code);
-          if (!sessionId) {
-            this.logger.error(`❌ [SSE] No session mapped for room ${meeting_code}!`);
-            this.logger.log(`📊 Current mappings: ${JSON.stringify(Array.from(this.roomSessions.entries()))}`);
-            return;
-          }
-
-          this.logger.log(`✅ [SSE] Found session ${sessionId} for room ${meeting_code}`);
-          this.handleVoiceMessage(meeting_code, event.data, client);
-        };
-
-        es.onerror = (err: any) => {
-          this.logger.error(
-            `[SSE][Room ${meeting_code}] error`,
-            JSON.stringify(err),
-          );
-
-
-          if (es.readyState === EventSource.CLOSED) {
-            this.logger.warn(
-              `[SSE][Room ${meeting_code}] connection closed, attempting to reconnect...`
-            );
-          }
-        };
-
-        this.sseConnections.set(sseKey, es);
+        this.createSSEConnection(sseUrl, meeting_code, account, client);
       } catch (error) {
         this.logger.error(
           `Error setting up SSE: ${error}`,
@@ -456,5 +420,64 @@ Type your answer or speak in the voice room...`;
     if (cleared > 0) {
       this.logger.debug(`Cleared ${cleared} expired cache entries`);
     }
+  }
+  private createSSEConnection(
+    sseUrl: string,
+    meeting_code: string,
+    account: Account,
+    client: Nezon.Client,
+    retry = 0,
+  ) {
+    const sseKey = `${account.appid}-${meeting_code}`;
+
+    this.logger.log(`🔌 Creating SSE connection (retry=${retry}) for room ${meeting_code}`);
+    const es = new EventSource(sseUrl);
+
+    es.onopen = () => {
+      this.logger.log(`✅ SSE connection OPENED for room ${meeting_code}`);
+    };
+
+    es.onmessage = (event) => {
+      this.logger.log(`[SSE][Room ${meeting_code}] data: ${event.data}`);
+
+      const sessionId = this.roomSessions.get(meeting_code);
+      if (!sessionId) {
+        this.logger.error(`❌ [SSE] No session mapped for room ${meeting_code}`);
+        return;
+      }
+
+      this.handleVoiceMessage(meeting_code, event.data, client);
+    };
+
+    es.onerror = (err: any) => {
+      this.logger.error(
+        `[SSE][Room ${meeting_code}] error`,
+        JSON.stringify(err),
+      );
+
+      es.close();
+      this.sseConnections.delete(sseKey);
+
+      if (retry < 5) {
+        const delay = 2000 + retry * 1000;
+        this.logger.warn(
+          `🔄 Retry SSE for room ${meeting_code} after ${delay}ms (retry ${retry + 1})`
+        );
+
+        setTimeout(() => {
+          this.createSSEConnection(
+            sseUrl,
+            meeting_code,
+            account,
+            client,
+            retry + 1,
+          );
+        }, delay);
+      } else {
+        this.logger.error(`❌ SSE retry limit reached for room ${meeting_code}`);
+      }
+    };
+
+    this.sseConnections.set(sseKey, es);
   }
 }
