@@ -298,7 +298,7 @@ export class AgentService {
       this.clearSessionCache(sessionId);
 
       // Send TTS completion
-      const spokenCompletion = 'Congratulations! You have completed the interview. Thank you for your time joining this interview';
+      const spokenCompletion = 'Congratulations! You have completed the interview. Thank you for your time joining this interview. You can out voice room to end the interview session';
 
       // Save bot's completion message
       await this.sessionService.addMessage(
