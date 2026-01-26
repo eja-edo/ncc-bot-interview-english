@@ -7,7 +7,10 @@ import { AxiosClient } from "@/shared/lib/axios-client";
 import { AGENT_ENDPOINTS } from "@/shared/constants/agent";
 import { Account } from "@/agent/agent.type";
 import { TTSProvider } from "./tts.provider";
-import { InterviewerService } from "@/interviewer/interviewer.service";
+import { EnhancedInterviewerService } from "@/interviewer/interview.service";
+import { InterviewSessionService } from "@/interviewer/interview-session.service";
+import { MessageRole, MessageType } from "@/database-test/entities/session-message.entity";
+//import { InterviewerService } from "@/interviewer/interviewer.service";
 
 interface TTSJobData {
   roomName: string;
@@ -20,7 +23,8 @@ export class TTSProcessor {
 
   constructor(
     private readonly ttsService: TTSProvider,
-    private readonly interviewer: InterviewerService
+    private readonly interviewer: EnhancedInterviewerService,
+    private readonly sessionService: InterviewSessionService, // ADD THIS
   ) {}
 
   @Process("process-room")
@@ -31,12 +35,12 @@ export class TTSProcessor {
     const joined = messages.join(" ");
     const response = `${joined}`;
 
-    const aiResponse = await this.interviewer.getResponse(response, roomName);
+    // const aiResponse = await this.interviewer.getResponse(response, roomName);
 
-    this.logger.log(`[TTS][Batch][Room ${roomName}] ${response}`);
+    // this.logger.log(`[TTS][Batch][Room ${roomName}] ${response}`);
 
-    await this.ttsService.callTTSAPI(roomName, aiResponse);
+    // await this.ttsService.callTTSAPI(roomName, aiResponse);
 
-    this.logger.log(`[TTS][Batch][Room ${roomName}] ${aiResponse}`);
+    // this.logger.log(`[TTS][Batch][Room ${roomName}] ${aiResponse}`);
   }
 }

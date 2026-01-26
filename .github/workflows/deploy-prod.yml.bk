@@ -1,0 +1,93 @@
+name: Deploy Interview Bot Production (Brunner)
+
+on:
+  push:
+    branches:
+      - hieu/dev
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'yarn.lock'
+      - 'ecosystem.config.js'
+      - '.github/workflows/deploy-prod.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Build & Deploy on Internal Server
+    runs-on: [self-hosted, runner]  
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'yarn'
+
+      - name: Verify environment
+        run: |
+          echo "Runner hostname: $(hostname)"
+          echo "User: $(whoami)"
+          node -v
+          yarn -v
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build application
+        run: yarn build
+
+      - name: Verify build
+        run: |
+          if [ ! -f "dist/main.js" ]; then
+            echo "❌ Build failed"
+            exit 1
+          fi
+          echo "✅ Build OK"
+
+      - name: Deploy to internal server
+        run: |
+          set -e
+
+          SERVER="172.16.100.184"
+          USER="nccsoft"
+          PROJECT_DIR="$HOME/ncc-bot-interview-english"
+
+          echo "🚀 Deploying to $SERVER"
+
+          ssh $USER@$SERVER << 'EOF'
+            set -e
+
+            echo "📂 Go to project"
+            cd ~/ncc-bot-interview-english
+
+            echo "📥 Pull latest code"
+            git fetch origin hieu/dev
+            git reset --hard origin/hieu/dev
+            git clean -fd
+
+            echo "📦 Install deps"
+            yarn install --frozen-lockfile
+
+            echo "🔨 Build"
+            yarn build
+
+            echo "🔄 Reload PM2"
+            if pm2 describe interview-bot-prod > /dev/null 2>&1; then
+              pm2 reload ecosystem.config.js --update-env
+            else
+              pm2 start ecosystem.config.js --env production
+            fi
+
+            pm2 save --force
+
+            echo "✅ Deploy done"
+          EOF
+
+      - name: Verify PM2
+        run: |
+          ssh nccsoft@172.16.100.184 "pm2 status interview-bot-prod"
