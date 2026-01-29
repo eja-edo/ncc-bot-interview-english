@@ -62,6 +62,8 @@ export class EnglishTestController {
 
       const templates = await this.templateService.getActiveTemplates();
 
+      const template = templates[2];
+
       await message.reply(
         SmartMessage.build()
           .addEmbed(
@@ -71,10 +73,12 @@ export class EnglishTestController {
               .addSelectField(
                 'Choose a template...',
                 'template',
-                (templates).map((template) => ({
-                  label: template.name,
-                  value: template.id,
-                })),
+                [
+                  {
+                    label: template.name,
+                    value: template.id,
+                  },
+                ]
               )
           )
           .addButton(

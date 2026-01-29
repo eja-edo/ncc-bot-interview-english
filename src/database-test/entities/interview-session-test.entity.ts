@@ -16,6 +16,11 @@ export enum SessionMode {
   MIXED = 'mixed',
 }
 
+export interface SelectedSection {
+  sectionName: string;
+  selectedQuestions: string[];
+} 
+
 @Entity('interview_sessions')
 export class InterviewSession {
   @PrimaryGeneratedColumn({ type: 'bigint' })
@@ -80,8 +85,12 @@ export class InterviewSession {
     feedback: string;
   }[];
 
-   @Column('jsonb', { nullable: true })
+  @Column('jsonb', { nullable: true })
   selectedQuestions: string[];
+
+  // NEW: Store which questions were selected from each section
+  @Column('jsonb', { nullable: true })
+  selectedSections: SelectedSection[];
 
   // Audio file paths
   @Column('simple-array', { nullable: true })
