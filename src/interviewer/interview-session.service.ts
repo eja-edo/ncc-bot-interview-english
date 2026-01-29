@@ -1,10 +1,11 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { InterviewSession, SessionStatus, SessionMode } from '../database-test/entities/interview-session-test.entity';
+import { InterviewSession, SessionStatus, SessionMode, SelectedSection } from '../database-test/entities/interview-session-test.entity';
 import { SessionMessage, MessageRole, MessageType } from '../database-test/entities/session-message.entity';
 import { TemplateService } from './template.service';
 import { UserService } from './user.service';
+import { QuestionSection } from '../database-test/entities/interview-template.entity';
 
 @Injectable()
 export class InterviewSessionService {
@@ -45,13 +46,31 @@ export class InterviewSessionService {
     }
 
     let selectedQuestions: string[] | null = null;
-    if (template.name === 'Non-AI Generate Interview') {
-      selectedQuestions = this.randomSelectQuestions(
-        template.sampleQuestions,
-        template.numberOfQuestions
-      );
-      this.logger.log(`Selected ${selectedQuestions.length} random questions for Non-AI template`);
-    }
+    let selectedSections: SelectedSection[] | null = null;
+    // if (template.name === 'Non-AI Generate Interview') {
+    //   selectedQuestions = this.randomSelectQuestions(
+    //     template.sampleQuestions,
+    //     template.numberOfQuestions
+    //   );
+    //   this.logger.log(`Selected ${selectedQuestions.length} random questions for Non-AI template`);
+    // }
+    if (template.questionSections && template.questionSections.length > 0) {
+        const result = this.selectQuestionsFromSections(template.questionSections);
+        selectedQuestions = result.flatQuestions;
+        selectedSections = result.sections;
+        
+        this.logger.log(
+          `Selected questions from ${template.questionSections.length} sections:\n` +
+          result.sections.map(s => `  • ${s.sectionName}: ${s.selectedQuestions.length} questions`).join('\n')
+        );
+      } else {
+        // Fallback to old random selection
+        selectedQuestions = this.randomSelectQuestions(
+          template.sampleQuestions,
+          template.numberOfQuestions
+        );
+        this.logger.log(`Selected ${selectedQuestions.length} random questions (legacy mode)`);
+      }
 
     // Create session
     const session = this.sessionRepo.create({
@@ -66,6 +85,7 @@ export class InterviewSessionService {
       questionScores: [],
       audioFilePaths: [],
       selectedQuestions,
+      selectedSections,
     });
 
     const savedSession = await this.sessionRepo.save(session);
@@ -73,6 +93,45 @@ export class InterviewSessionService {
 
     // Return with full relations
     return this.getSessionById(savedSession.id);
+  }
+
+  /**
+   * NEW: Select questions from structured sections
+   */
+  private selectQuestionsFromSections(sections: QuestionSection[]): {
+    flatQuestions: string[];
+    sections: SelectedSection[];
+  } {
+    const selectedSections: SelectedSection[] = [];
+    const flatQuestions: string[] = [];
+
+    for (const section of sections) {
+      const selected = this.randomSelectFromArray(
+        section.questions,
+        section.questionsToSelect
+      );
+
+      selectedSections.push({
+        sectionName: section.name,
+        selectedQuestions: selected,
+      });
+
+      flatQuestions.push(...selected);
+    }
+
+    return { flatQuestions, sections: selectedSections };
+  }
+
+  /**
+   * Helper: Randomly select N items from array
+   */
+  private randomSelectFromArray<T>(array: T[], count: number): T[] {
+    if (array.length <= count) {
+      return [...array];
+    }
+
+    const shuffled = [...array].sort(() => Math.random() - 0.5);
+    return shuffled.slice(0, count);
   }
 
   private randomSelectQuestions(questionPool: string[], count: number): string[] {
@@ -92,11 +151,6 @@ export class InterviewSessionService {
     // Randomly select (count - 1) questions from remaining pool
     const shuffled = [...remainingQuestions].sort(() => Math.random() - 0.5);
     selected.push(...shuffled.slice(0, count - 1));
-
-    this.logger.debug(`Selected questions: 
-      1. ${selected[0].substring(0, 50)}... (FIXED)
-      ${selected.slice(1).map((q, i) => `${i + 2}. ${q.substring(0, 50)}...`).join('\n      ')}
-    `);
 
     return selected;
   }

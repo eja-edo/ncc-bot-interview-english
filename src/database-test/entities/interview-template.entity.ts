@@ -13,6 +13,13 @@ export enum InterviewType {
   SITUATIONAL = 'situational',
 }
 
+export interface QuestionSection {
+  name: string;
+  description?: string;
+  questions: string[];
+  questionsToSelect: number; // How many questions to randomly select from this section
+}
+
 @Entity('interview_templates')
 export class InterviewTemplate {
   @PrimaryGeneratedColumn({ type: 'bigint' })
@@ -43,6 +50,9 @@ export class InterviewTemplate {
 
   @Column('simple-array')
   sampleQuestions: string[];
+  // NEW: Structured sections for Non-AI templates
+  @Column('jsonb', { nullable: true })
+  questionSections: QuestionSection[];
 
   @Column({ default: 5 })
   numberOfQuestions: number;
