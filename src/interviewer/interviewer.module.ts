@@ -1,7 +1,7 @@
 import { forwardRef, Module } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { createAgent } from "langchain";
-import { MemorySaver } from "@langchain/langgraph";
+// import { MemorySaver } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import { TemplateService } from "./template.service";
 import { InterviewSessionService } from "./interview-session.service";
@@ -17,7 +17,7 @@ import { SessionMessage } from "@/database-test/entities/session-message.entity"
 import { UserService } from "./user.service";
 import { AIService } from "./ai.service";
 
-const checkpointer = new MemorySaver();
+// const checkpointer = new MemorySaver();
 
 @Module({
   imports: [ConfigModule,

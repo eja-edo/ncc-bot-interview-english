@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InterviewSession } from '../database-test/entities/interview-session-test.entity';
+import { InterviewSession, SelectedSection } from '../database-test/entities/interview-session-test.entity';
 import { MessageRole } from '../database-test/entities/session-message.entity';
 import { InterviewTemplate } from '@/database-test/entities/interview-template.entity';
 import { AIService } from './ai.service'; 
@@ -24,6 +24,16 @@ export class EnhancedInterviewerService {
 
   async generateGreeting(template: InterviewTemplate): Promise<string> {
     if (template.name === 'Non-AI Generate Interview') {
+    // Check if using sections
+    if (template.questionSections && template.questionSections.length > 0) {
+      const sectionsSummary = template.questionSections
+        .map(s => `${s.name} (${s.questionsToSelect} question${s.questionsToSelect > 1 ? 's' : ''})`)
+        .join(', ');
+
+      return `Hello! Welcome to the interview. I'll be asking you ${template.numberOfQuestions} questions. Please answer each question clearly and take your time. When you're ready, type or say "ready" to begin.`;
+    }
+
+    // Fallback for legacy format
     return `Hello! Welcome to the Non-AI Generate Interview. I'll be asking you ${template.numberOfQuestions} pre-defined questions. Please answer each question clearly and take your time. When you're ready, type or say "ready" to begin.`;
   }
 
@@ -295,10 +305,41 @@ Be specific, encouraging, and reference actual examples from their answers.`;
 
     const question = questions[questionIndex];
 
+    // Optional: Add section context if using sections
+    if (session.selectedSections) {
+      const sectionInfo = this.findQuestionSection(question, session.selectedSections);
+      if (sectionInfo) {
+        this.logger.log(
+          `Question ${questionNumber} from section "${sectionInfo.section}" ` +
+          `(${sectionInfo.positionInSection}/${sectionInfo.totalInSection})`
+        );
+      }
+    }
+
     this.logger.log(
-      `Using pre-defined question ${questionNumber}/${questions.length}: "${question.substring(0, 50)}..."`
+      `Using question ${questionNumber}/${questions.length}: "${question.substring(0, 50)}..."`
     );
 
     return question;
+  }
+
+  /**
+ * Helper: Find which section a question belongs to
+ */
+  private findQuestionSection(
+    question: string,
+    selectedSections: SelectedSection[]
+  ): { section: string; positionInSection: number; totalInSection: number } | null {
+    for (const section of selectedSections) {
+      const index = section.selectedQuestions.indexOf(question);
+      if (index !== -1) {
+        return {
+          section: section.sectionName,
+          positionInSection: index + 1,
+          totalInSection: section.selectedQuestions.length,
+        };
+      }
+    }
+    return null;
   }
 }

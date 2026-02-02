@@ -44,6 +44,8 @@ export class EnglishTestController {
     };
   }
 
+  private answerTimeouts = new Map<string, NodeJS.Timeout>();
+
   @Command("start")
   async start(
     @AutoContext() [message]: Nezon.AutoContext,
@@ -62,6 +64,8 @@ export class EnglishTestController {
 
       const templates = await this.templateService.getActiveTemplates();
 
+      const template = templates[2];
+
       await message.reply(
         SmartMessage.build()
           .addEmbed(
@@ -71,10 +75,12 @@ export class EnglishTestController {
               .addSelectField(
                 'Choose a template...',
                 'template',
-                (templates).map((template) => ({
-                  label: template.name,
-                  value: template.id,
-                })),
+                [
+                  {
+                    label: template.name,
+                    value: template.id,
+                  },
+                ]
               )
           )
           .addButton(
@@ -240,6 +246,8 @@ ${nextQuestion}
     if (channel) {
       await channel.send({ t: responseMessage });
     }
+
+    this.startAnswerTimeout(session.id, client, channelId, session.userId);
   }
 
   @Component({ pattern: '/interview/start/:user_id' })
@@ -382,6 +390,45 @@ ${nextQuestion}
     }
   }
 
+  private startAnswerTimeout(
+      sessionId: string,
+      client: Nezon.Client,
+      channelId: string,
+      userId: string,
+  ) {
+    const existing = this.answerTimeouts.get(sessionId);
+    if (existing) {
+      clearTimeout(existing);
+    }
+
+    const timeout = setTimeout(async () => {
+      const channel = client.channels.get(channelId);
+      if (!channel) return;
+      await channel.send(
+          SmartMessage.build()
+              .addEmbed(
+                  new EmbedBuilder()
+                      .setColor('#0099ff')
+                      .setTitle('Did you finish your answer?')
+              )
+              .addButton(
+                  new ButtonBuilder()
+                      .setCustomId(`/interview/confirmCompletedAnswer/${userId}`)
+                      .setLabel('Yes ')
+                      .setStyle(ButtonStyle.Success)
+              )
+              .addButton(
+                  new ButtonBuilder()
+                      .setCustomId(`/interview/confirmNotCompletedAnswer/${userId}`)
+                      .setLabel('No')
+                      .setStyle(ButtonStyle.Danger)
+              )
+              .toContent()
+      );
+      this.answerTimeouts.delete(sessionId);
+    }, 10_000);
+  }
+
   @On(Events.VoiceLeavedEvent)
   async onVoiceLeaved(
     @EventPayload() event: Nezon.VoiceLeavedPayload,
@@ -498,5 +545,43 @@ ${nextQuestion}
         SmartMessage.text('❌ Failed to cancel selection.')
       );
     }
+  }
+
+  @Component({ pattern: '/interview/confirmCompletedAnswer/:user_id'})
+  async onConfirmCompleted(
+      @ComponentParams('user_id') userId: string,
+      @ChannelMessagePayload() payload: Nezon.ChannelMessage,
+      @Client() client: Nezon.Client,
+      @AutoContext() [message]: Nezon.AutoContext,
+  ) {
+    const session = await this.sessionService.getActiveSession(
+        userId,
+        payload.channel_id,
+    );
+    if (!session) {
+      this.logger.log(`No active session found for user ${userId}`);
+      return;
+    }
+
+    await message.update(
+        SmartMessage.text('✅ Got it! Moving to the next question...')
+    );
+
+    await this.sendNextQuestion(
+        session,
+        session.currentQuestionIndex + 1,
+        client,
+        payload.channel_id,
+    );
+  }
+
+  @Component({ pattern: '/interview/confirmNotCompletedAnswer/:user_id' })
+  async onConfirmNotCompleted(
+      @ComponentParams('user_id') userId: string,
+      @AutoContext() [message]: Nezon.AutoContext,
+  ) {
+    await message.update(
+        SmartMessage.text('⏳ No problem. Please continue your answer.')
+    );
   }
 }
