@@ -24,6 +24,7 @@ import { InterviewSessionService } from '../interviewer/interview-session.servic
 import { EnhancedInterviewerService } from '../interviewer/interview.service';
 import { SessionMode, SessionStatus } from '../database-test/entities/interview-session-test.entity';
 import { MessageRole, MessageType } from '../database-test/entities/session-message.entity';
+import { ChatService } from '../interviewer/chat.service';
 
 @Injectable()
 export class EnglishTestController {
@@ -37,6 +38,7 @@ export class EnglishTestController {
     private readonly templateService: TemplateService,
     private readonly sessionService: InterviewSessionService,
     private readonly interviewerService: EnhancedInterviewerService,
+    private readonly chatService: ChatService,
   ) {
     // Register voice message event handler
     this.agentService.onVoiceMessageProcessed((event) => {
@@ -208,7 +210,9 @@ export class EnglishTestController {
  Template: ${session.template.name}
  Questions Answered: ${session.template.numberOfQuestions}
 
-━━━━━━━━━━━━━━━━━━━━━━`;
+━━━━━━━━━━━━━━━━━━━━━━
+
+⏳ Your interview recording will be available shortly...`;
       const channel = client.channels.get(channelId);
       if (channel) {
         await channel.send({ t: completionMessage });
@@ -257,14 +261,12 @@ ${nextQuestion}
 
 ━━━━━━━━━━━━━━━━━━━━━━
 
-💬 Type your answer or speak in the voice room...`;
+💬 Speak in the voice room...`;
 
     const channel = client.channels.get(channelId);
     if (channel) {
       await channel.send({ t: responseMessage });
     }
-
-    this.startAnswerTimeout(session.id, client, channelId, session.userId);
   }
 
   @Component({ pattern: '/interview/start/:user_id' })
@@ -319,7 +321,7 @@ ${nextQuestion}
         channelId,
         roomName,
         template.id,
-        SessionMode.MIXED,
+        SessionMode.VOICE,
       );
 
       if (!session || !session.id) {
@@ -346,8 +348,12 @@ ${nextQuestion}
 
         await this.agentService.handleInviteAgent(
           client,
-          { channel_id: channelId },
+          {
+            voice_channel_id: channelId,
+            channel_id: channelId,
+          },
           account,
+          session.id, // NEW: Pass sessionId
         );
 
         this.logger.log(`✅ Bot invite request sent to room ${roomName}`);
@@ -449,6 +455,7 @@ ${nextQuestion}
       );
       this.answerTimeouts.delete(sessionId);
     }, 10_000);
+    this.answerTimeouts.set(sessionId, timeout);
   }
 
   @On(Events.VoiceLeavedEvent)
@@ -486,7 +493,7 @@ ${nextQuestion}
       if (!session) {
         this.logger.log(`No active session found for user ${userId} in room ${roomName}`);
 
-        await this.kickBotFromRoom(client, voiceChannelId, roomName);
+        await this.kickBotFromRoom(client, voiceChannelId, roomName, session.id);
         return;
       }
 
@@ -510,7 +517,7 @@ ${nextQuestion}
       } else {
         this.logger.log(`ℹ️ Session ${session.id} status: ${session.status} (no action)`);
       }
-      await this.kickBotFromRoom(client, voiceChannelId, roomName);
+      await this.kickBotFromRoom(client, voiceChannelId, roomName, session.id);
 
     } catch (error) {
       this.logger.error('❌ Error handling voice leave event:', error);
@@ -521,6 +528,7 @@ ${nextQuestion}
     client: Nezon.Client,
     channelId: string,
     roomName: string,
+    sessionId: string,
   ): Promise<void> {
     try {
       this.logger.log(`🤖 Kicking bot from room ${roomName}...`);
@@ -532,6 +540,7 @@ ${nextQuestion}
           channel_id: channelId,
         },
         this.getAccount(),
+        sessionId,
       );
 
       this.logger.log(`✅ Bot removed from room ${roomName}`);
@@ -567,52 +576,92 @@ ${nextQuestion}
     }
   }
 
-  @Component({ pattern: '/interview/confirmCompletedAnswer/:user_id'})
+  /**
+   * User confirms they finished speaking - process their answer and send next question
+   */
+  @Component({ pattern: '/interview/confirmCompleted/:user_id' })
   async onConfirmCompleted(
-      @ComponentParams('user_id') userId: string,
-      @ChannelMessagePayload() payload: Nezon.ChannelMessage,
-      @Client() client: Nezon.Client,
-      @AutoContext() [message]: Nezon.AutoContext,
+    @ComponentParams('user_id') userId: string,
+    @ChannelMessagePayload() payload: Nezon.ChannelMessage,
+    @Client() client: Nezon.Client,
+    @AutoContext() [message]: Nezon.AutoContext,
   ) {
-    const session = await this.sessionService.getActiveSession(
+    try {
+      const session = await this.sessionService.getActiveSession(
         userId,
         payload.channel_id,
-    );
-    if (!session) {
-      this.logger.log(`No active session found for user ${userId}`);
-      return;
-    }
+      );
 
-    const nextQuestionNumber = session.currentQuestionIndex + 1;
-    const totalQuestions = session.template.numberOfQuestions;
+      if (!session) {
+        this.logger.log(`No active session found for user ${userId}`);
+        await message.update(
+          SmartMessage.text('❌ No active interview session found.')
+        );
+        return;
+      }
 
-    this.logger.log(`📊 Confirm completed - Current: ${session.currentQuestionIndex}, Next would be: ${nextQuestionNumber}, Total: ${totalQuestions}`);
+      // Clear the timeout for this session
+      const timeout = this.answerTimeouts.get(session.id);
+      if (timeout) {
+        clearTimeout(timeout);
+        this.answerTimeouts.delete(session.id);
+      }
 
-    // FIX: Check if interview is complete before sending next question
-    if (nextQuestionNumber > totalQuestions) {
-      this.logger.log('✅ All questions answered, generating feedback');
+      // Check if this is the first message (greeting response)
+      const userMessages = session.messages?.filter(m => m.role === MessageRole.USER) || [];
+      const isFirstMessage = userMessages.length === 1; // Just the greeting response
 
-      await message.update(
+      if (isFirstMessage) {
+        // User responded to greeting, start first question
+        this.logger.log(`User responded to greeting, starting first question`);
+
+        await message.update(
+          SmartMessage.text('✅ Great! Let\'s begin the interview...')
+        );
+
+        await this.sendNextQuestion(
+          session,
+          1, // First question
+          client,
+          payload.channel_id,
+        );
+        return;
+      }
+
+      // Check if interview is complete
+      const nextQuestionNumber = session.currentQuestionIndex + 1;
+      const totalQuestions = session.template.numberOfQuestions;
+
+      this.logger.log(
+        `📊 Confirm completed - Current: ${session.currentQuestionIndex}, ` +
+        `Next would be: ${nextQuestionNumber}, Total: ${totalQuestions}`
+      );
+
+      if (nextQuestionNumber > totalQuestions) {
+        // All questions answered
+        this.logger.log('✅ All questions answered, generating feedback');
+
+        await message.update(
           SmartMessage.text('🎉 All questions answered! Generating your feedback...')
-      );
+        );
 
-      const overallFeedback = await this.interviewerService.generateOverallFeedback(
-        await this.sessionService.getSessionById(session.id),
-      );
+        const overallFeedback = await this.interviewerService.generateOverallFeedback(
+          await this.sessionService.getSessionById(session.id),
+        );
 
-      await this.sessionService.completeSession(session.id, overallFeedback);
+        await this.sessionService.completeSession(session.id, overallFeedback);
 
-      const spokenCompletion = 'Congratulations! You have completed the interview. Thank you for your time joining this interview. You can out voice room to end the interview session';
+        const spokenCompletion = 'Congratulations! You have completed the interview. Thank you for your time joining this interview. You can out voice room to end the interview session';
 
-      await this.sessionService.addMessage(
-        session.id,
-        MessageRole.ASSISTANT,
-        spokenCompletion,
-        MessageType.TEXT,
-      );
-      await this.agentService.sendTTS(session.roomName, spokenCompletion);
+        await this.sessionService.addMessage(
+          session.id,
+          MessageRole.ASSISTANT,
+          spokenCompletion,
+          MessageType.TEXT,
+        );
+        await this.agentService.sendTTS(session.roomName, spokenCompletion);
 
-      const completionMessage = `🎉 **Interview Complete!**
+        const completionMessage = `🎉 **Interview Complete!**
 
 "${spokenCompletion}"
 
@@ -620,34 +669,69 @@ ${nextQuestion}
  Template: ${session.template.name}
  Questions Answered: ${session.template.numberOfQuestions}
 
-━━━━━━━━━━━━━━━━━━━━━━`;
-      const channel = client.channels.get(payload.channel_id);
-      if (channel) {
-        await channel.send({ t: completionMessage });
+━━━━━━━━━━━━━━━━━━━━━━
+
+⏳ Your interview recording will be available shortly...`;
+
+        const channel = client.channels.get(payload.channel_id);
+        if (channel) {
+          await channel.send({ t: completionMessage });
+        }
+
+        return;
       }
 
-      return;
-    }
+      // Continue to next question
+      await message.update(
+        SmartMessage.text('✅ Answer recorded! Moving to the next question...')
+      );
 
-    await message.update(
-        SmartMessage.text('✅ Got it! Moving to the next question...')
-    );
-
-    await this.sendNextQuestion(
+      await this.sendNextQuestion(
         session,
         nextQuestionNumber,
         client,
         payload.channel_id,
-    );
+      );
+
+    } catch (error) {
+      this.logger.error('Error in confirmCompleted:', error);
+      await message.update(
+        SmartMessage.text('❌ An error occurred. Please try again.')
+      );
+    }
   }
 
-  @Component({ pattern: '/interview/confirmNotCompletedAnswer/:user_id' })
+  /**
+   * User says they're still speaking - just acknowledge and wait
+   */
+  @Component({ pattern: '/interview/confirmNotCompleted/:user_id' })
   async onConfirmNotCompleted(
-      @ComponentParams('user_id') userId: string,
-      @AutoContext() [message]: Nezon.AutoContext,
+    @ComponentParams('user_id') userId: string,
+    @AutoContext() [message]: Nezon.AutoContext,
   ) {
-    await message.update(
-        SmartMessage.text('⏳ No problem. Please continue your answer.')
-    );
+    try {
+      const session = await this.sessionService.getActiveSession(
+        userId,
+        message.channelId,
+      );
+
+      if (session) {
+        // Clear the timeout
+        const timeout = this.answerTimeouts.get(session.id);
+        if (timeout) {
+          clearTimeout(timeout);
+          this.answerTimeouts.delete(session.id);
+        }
+      }
+
+      await message.update(
+        SmartMessage.text('⏳ No problem. Please continue your answer.\n\nWe\'ll check again in a moment...')
+      );
+
+      this.logger.log(`User ${userId} indicated they're still speaking`);
+
+    } catch (error) {
+      this.logger.error('Error in confirmNotCompleted:', error);
+    }
   }
 }

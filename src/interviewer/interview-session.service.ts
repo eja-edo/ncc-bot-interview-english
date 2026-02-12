@@ -18,7 +18,7 @@ export class InterviewSessionService {
     private readonly messageRepo: Repository<SessionMessage>,
     private readonly templateService: TemplateService,
     private readonly userService: UserService,
-  ) {}
+  ) { }
 
   /**
    * Create new interview session
@@ -33,7 +33,7 @@ export class InterviewSessionService {
   ): Promise<InterviewSession> {
     // Find or create user
     const user = await this.userService.findOrCreateUser(mezonUserId, username);
-    
+
     // Get template with full info
     const template = await this.templateService.getTemplateById(templateId);
 
@@ -55,22 +55,22 @@ export class InterviewSessionService {
     //   this.logger.log(`Selected ${selectedQuestions.length} random questions for Non-AI template`);
     // }
     if (template.questionSections && template.questionSections.length > 0) {
-        const result = this.selectQuestionsFromSections(template.questionSections);
-        selectedQuestions = result.flatQuestions;
-        selectedSections = result.sections;
-        
-        this.logger.log(
-          `Selected questions from ${template.questionSections.length} sections:\n` +
-          result.sections.map(s => `  • ${s.sectionName}: ${s.selectedQuestions.length} questions`).join('\n')
-        );
-      } else {
-        // Fallback to old random selection
-        selectedQuestions = this.randomSelectQuestions(
-          template.sampleQuestions,
-          template.numberOfQuestions
-        );
-        this.logger.log(`Selected ${selectedQuestions.length} random questions (legacy mode)`);
-      }
+      const result = this.selectQuestionsFromSections(template.questionSections);
+      selectedQuestions = result.flatQuestions;
+      selectedSections = result.sections;
+
+      this.logger.log(
+        `Selected questions from ${template.questionSections.length} sections:\n` +
+        result.sections.map(s => `  • ${s.sectionName}: ${s.selectedQuestions.length} questions`).join('\n')
+      );
+    } else {
+      // Fallback to old random selection
+      selectedQuestions = this.randomSelectQuestions(
+        template.sampleQuestions,
+        template.numberOfQuestions
+      );
+      this.logger.log(`Selected ${selectedQuestions.length} random questions (legacy mode)`);
+    }
 
     // Create session
     const session = this.sessionRepo.create({
@@ -115,16 +115,16 @@ export class InterviewSessionService {
       if (i === 0) {
         // Always include the fixed first question
         const otherQuestions = section.questions.filter(q => q !== FIXED_FIRST_QUESTION);
-        
+
         // Select (questionsToSelect - 1) random questions from remaining
         const randomOthers = this.randomSelectFromArray(
           otherQuestions,
           section.questionsToSelect - 1
         );
-        
+
         // Put the fixed question FIRST
         selected = [FIXED_FIRST_QUESTION, ...randomOthers];
-        
+
         this.logger.log(`✅ First question locked: "${FIXED_FIRST_QUESTION}"`);
       } else {
         // For other sections, select randomly as usual
@@ -262,9 +262,9 @@ export class InterviewSessionService {
     return savedMessage;
   }
 
-/**
-   * Complete session with overall feedback
-   */
+  /**
+     * Complete session with overall feedback
+     */
   async completeSession(
     sessionId: string,
     overallFeedback: InterviewSession['overallFeedback'],
@@ -394,7 +394,7 @@ export class InterviewSessionService {
     if (session && session.status === SessionStatus.IN_PROGRESS) {
       session.status = SessionStatus.CANCELLED;
       session.completedAt = new Date();
-      
+
       // Calculate duration
       if (session.startedAt) {
         const duration = Math.floor(
@@ -406,5 +406,66 @@ export class InterviewSessionService {
       await this.sessionRepo.save(session);
       this.logger.log(`Cancelled session ${session.id}`);
     }
+  }
+  /**
+ * Add audio URLs to session
+ */
+  async addAudioUrls(
+    sessionId: string,
+    urls: string[],
+  ): Promise<InterviewSession> {
+    const session = await this.sessionRepo.findOne({
+      where: { id: sessionId },
+      select: ['id', 'audioFilePaths'],
+    });
+
+    if (!session) {
+      throw new BadRequestException(`Session ${sessionId} not found`);
+    }
+
+    // Append new URLs to existing array
+    const currentUrls = session.audioFilePaths || [];
+    const updatedUrls = [...currentUrls, ...urls];
+
+    // Update session
+    await this.sessionRepo.update(
+      { id: sessionId },
+      { audioFilePaths: updatedUrls }
+    );
+
+    this.logger.log(
+      `Added ${urls.length} audio URL(s) to session ${sessionId}. Total: ${updatedUrls.length}`
+    );
+
+    // Return updated session
+    return this.getSessionById(sessionId);
+  }
+
+  /**
+   * Get all audio URLs for a session
+   */
+  async getAudioUrls(sessionId: string): Promise<string[]> {
+    const session = await this.sessionRepo.findOne({
+      where: { id: sessionId },
+      select: ['audioFilePaths'],
+    });
+
+    if (!session) {
+      throw new BadRequestException(`Session ${sessionId} not found`);
+    }
+
+    return session.audioFilePaths || [];
+  }
+
+  /**
+   * Clear all audio URLs from a session
+   */
+  async clearAudioUrls(sessionId: string): Promise<void> {
+    await this.sessionRepo.update(
+      { id: sessionId },
+      { audioFilePaths: [] }
+    );
+
+    this.logger.log(`Cleared audio URLs for session ${sessionId}`);
   }
 }

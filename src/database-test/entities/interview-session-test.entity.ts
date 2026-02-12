@@ -93,7 +93,7 @@ export class InterviewSession {
   selectedSections: SelectedSection[];
 
   // Audio file paths
-  @Column('simple-array', { nullable: true })
+  @Column('jsonb', { default: [] })
   audioFilePaths: string[];
 
   // Full transcript for voice mode
