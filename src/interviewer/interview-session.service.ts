@@ -97,6 +97,7 @@ export class InterviewSessionService {
 
   /**
    * NEW: Select questions from structured sections
+   * IMPORTANT: First question is ALWAYS "Can you introduce yourself and your background?"
    */
   private selectQuestionsFromSections(sections: QuestionSection[]): {
     flatQuestions: string[];
@@ -104,12 +105,34 @@ export class InterviewSessionService {
   } {
     const selectedSections: SelectedSection[] = [];
     const flatQuestions: string[] = [];
+    const FIXED_FIRST_QUESTION = 'Can you introduce yourself and your background?';
 
-    for (const section of sections) {
-      const selected = this.randomSelectFromArray(
-        section.questions,
-        section.questionsToSelect
-      );
+    for (let i = 0; i < sections.length; i++) {
+      const section = sections[i];
+      let selected: string[];
+
+      // For the FIRST section only
+      if (i === 0) {
+        // Always include the fixed first question
+        const otherQuestions = section.questions.filter(q => q !== FIXED_FIRST_QUESTION);
+        
+        // Select (questionsToSelect - 1) random questions from remaining
+        const randomOthers = this.randomSelectFromArray(
+          otherQuestions,
+          section.questionsToSelect - 1
+        );
+        
+        // Put the fixed question FIRST
+        selected = [FIXED_FIRST_QUESTION, ...randomOthers];
+        
+        this.logger.log(`✅ First question locked: "${FIXED_FIRST_QUESTION}"`);
+      } else {
+        // For other sections, select randomly as usual
+        selected = this.randomSelectFromArray(
+          section.questions,
+          section.questionsToSelect
+        );
+      }
 
       selectedSections.push({
         sectionName: section.name,

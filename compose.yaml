@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   app:
     build:
@@ -33,8 +31,19 @@ services:
     networks:
       - app-network
 
+  postgres:
+    image: postgres:15-alpine
+    container_name: ncc-bot-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=12345678
+      - POSTGRES_DB=bot_interview
+
 volumes:
   redis-data:
+
 
 networks:
   app-network:

@@ -3,6 +3,7 @@ export const AGENT_ENDPOINTS = {
   CREATE_DISPATCH: "/api/create_dispatch",
   TTS_SPEAK: "/api/tts/speak",
   STREAM_MESSAGE: "/api/stream_message",
+  AGENT_CONTROL_TRANSCRIPT: "/api/agent-control/transcript",
 } as const;
 
 export function buildStreamMessageUrl(
