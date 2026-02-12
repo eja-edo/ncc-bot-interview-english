@@ -35,4 +35,4 @@ jobs:
         run: |
             rm -rf /home/nccsoft/ncc-bot-interview-english/dist/*
             cp -rf . /home/nccsoft/ncc-bot-interview-english/
-            pm2 restart mezon-interview-english-prod
+            pm2 restart mezon-interview-english-pro
