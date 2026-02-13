@@ -1,11 +1,11 @@
 import { Module } from "@nestjs/common";
-import { EnglishTestController } from "@/english-test/english-test.controller";
-import { AgentModule } from "@/agent/agent.module";
+import { InterviewAudioController } from "@/record-audio/record-audio.controller";
 import { InterviewerModule } from "@/interviewer/interviewer.module";
 
 @Module({
   imports: [InterviewerModule],
+  controllers: [InterviewAudioController],
   providers: [],
   exports: [],
 })
-export class RecordAudioModule {}
+export class RecordAudioModule { }

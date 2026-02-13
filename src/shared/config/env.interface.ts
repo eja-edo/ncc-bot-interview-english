@@ -6,4 +6,6 @@ export interface EnvConfig {
   REDIS_HOST: string;
   REDIS_PORT: number;
   REDIS_PASSWORD?: string;
+  MINIO_ENDPOINT: string;
+  MINIO_BUCKET: string;
 }

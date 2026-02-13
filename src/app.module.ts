@@ -7,6 +7,7 @@ import { Module } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { InterviewerModule } from "./interviewer/interviewer.module";
 import { DatabaseTestModule } from "./database-test/database-test.module";
+import { RecordAudioModule } from "./record-audio/record-audio.module";
 
 @Module({
   imports: [
@@ -43,8 +44,9 @@ import { DatabaseTestModule } from "./database-test/database-test.module";
       }),
     }),
     EnglishTestModule,
+    RecordAudioModule,
   ],
   controllers: [],
   providers: [],
 })
-export class AppModule {}
+export class AppModule { }

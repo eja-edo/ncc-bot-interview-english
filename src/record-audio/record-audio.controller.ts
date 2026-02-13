@@ -1,14 +1,15 @@
-import { 
-  Controller, 
-  Post, 
-  Body, 
-  HttpCode, 
+import {
+  Controller,
+  Post,
+  Body,
+  HttpCode,
   HttpStatus,
   Logger,
   Get,
   Param,
   BadRequestException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InterviewSessionService } from '../interviewer/interview-session.service';
 import { UploadAudioDto } from '../record-audio/upload-audio.dto';
 import { ChatService } from '../interviewer/chat.service';
@@ -20,7 +21,8 @@ export class InterviewAudioController {
   constructor(
     private readonly sessionService: InterviewSessionService,
     private readonly chatService: ChatService,
-  ) {}
+    private readonly configService: ConfigService,
+  ) { }
 
   /**
    * POST /api/interview/audio
@@ -49,23 +51,33 @@ export class InterviewAudioController {
         throw new BadRequestException('tracks must be an object');
       }
 
-      // Extract URLs from tracks object
+      // Extract filenames from tracks object
       const trackEntries = Object.entries(dto.tracks);
-      
+
       if (trackEntries.length === 0) {
         throw new BadRequestException('tracks object is empty');
       }
 
-      const urls = trackEntries.map(([timestamp, url]) => url);
+      // Get MinIO configuration
+      const minioEndpoint = this.configService.get<string>('MINIO_ENDPOINT');
+      const minioBucket = this.configService.get<string>('MINIO_BUCKET');
+
+      // Build full URLs from filenames
+      const urls = trackEntries.map(([timestamp, filename]) => {
+        // Remove leading slash if present
+        const cleanFilename = filename.startsWith('/') ? filename.slice(1) : filename;
+        return `${minioEndpoint}/${minioBucket}/${cleanFilename}`;
+      });
 
       this.logger.log(
-        `Received ${urls.length} audio URL(s) for session ${dto.interview_id}\n` +
-        `Tracks: ${JSON.stringify(dto.tracks, null, 2)}`
+        `Received ${urls.length} audio file(s) for session ${dto.interview_id}\n` +
+        `Tracks: ${JSON.stringify(dto.tracks, null, 2)}\n` +
+        `Generated URLs: ${JSON.stringify(urls, null, 2)}`
       );
 
       // 1. Get session info first
       const session = await this.sessionService.getSessionById(dto.interview_id);
-      
+
       if (!session) {
         return {
           success: false,
