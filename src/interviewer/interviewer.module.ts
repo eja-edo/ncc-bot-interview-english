@@ -16,6 +16,7 @@ import { CustomPrompt } from "@/database-test/entities/custom-prompt.entity";
 import { SessionMessage } from "@/database-test/entities/session-message.entity";
 import { UserService } from "./user.service";
 import { AIService } from "./ai.service";
+import { ChatService } from "./chat.service";
 
 // const checkpointer = new MemorySaver();
 
@@ -34,12 +35,14 @@ import { AIService } from "./ai.service";
     InterviewSessionService,
     EnhancedInterviewerService,
     AIService,
+    ChatService,
   ],
   exports: [ TemplateService,
     InterviewSessionService,
     EnhancedInterviewerService,
     UserService,
     AIService,
+    ChatService,
 ],
 })
 export class InterviewerModule {}

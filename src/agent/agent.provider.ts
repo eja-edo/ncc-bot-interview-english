@@ -24,6 +24,18 @@ interface VoiceBuffer {
   isProcessing: boolean;
 }
 
+interface ProcessedMessage {
+  content: string;
+  timestamp: number;
+}
+
+export interface VoiceMessageProcessedEvent {
+  sessionId: string;
+  userId: string;
+  channelId: string;
+  voiceText: string;
+}
+
 @Injectable()
 export class AgentService {
   private readonly logger = new Logger(AgentService.name);
@@ -37,6 +49,13 @@ export class AgentService {
   }>();
   private readonly CACHE_TTL_MS = 30000;
 
+  // NEW: Track processed messages to prevent duplicates
+  private readonly processedMessages = new Map<string, ProcessedMessage[]>();
+  private readonly MESSAGE_DEDUP_WINDOW_MS = 3000; // 3 seconds window for deduplication
+
+  // NEW: Callback for voice message processed event
+  private voiceMessageCallback?: (event: VoiceMessageProcessedEvent) => void;
+
   constructor(
     @InjectQueue("tts") private readonly ttsQueue: Queue,
     private readonly configService: ConfigService,
@@ -46,132 +65,284 @@ export class AgentService {
     private readonly sessionService: InterviewSessionService,
   ) { }
 
-  async handleRemoveAgent(
-    client: Nezon.Client,
-    event: AgentEvent,
-    account: Account
-  ): Promise<void> {
+  /**
+   * NEW: Register callback for voice message processed event
+   */
+  onVoiceMessageProcessed(callback: (event: VoiceMessageProcessedEvent) => void): void {
+    this.voiceMessageCallback = callback;
+  }
+
+  /**
+   * NEW: Enable transcript stream for voice room
+   */
+  async enableTranscript(roomName: string): Promise<void> {
     try {
-      const channel = await client.channels.fetch(
-        event.voice_channel_id ?? event.channel_id ?? ""
-      );
-
-      if (!channel?.meeting_code) {
-        this.logger.error("Channel or meeting_code not found");
-        return;
-      }
-
-      const meeting_code = channel.meeting_code;
+      const baseurl = this.configService.get<string>("AGENT_BASE_URL")!;
+      const url = `${baseurl}${AGENT_ENDPOINTS.AGENT_CONTROL_TRANSCRIPT}`;
 
       const payload = {
-        account,
-        room_name: meeting_code,
+        action: "enable",
+        room_name: roomName,
       };
 
+      this.logger.log(`🎙️ Enabling transcript for room ${roomName}...`);
+      
       const response = await this.axiosClient
         .getInstance()
-        .post(AGENT_ENDPOINTS.CANCEL_DISPATCH, payload);
+        .post(url, payload);
 
       this.logger.log(
-        `Agent removed, API response: ${JSON.stringify(response.data)}`
+        `✅ Transcript enabled for room ${roomName}: ${JSON.stringify(response.data)}`
       );
-
-      const sseKey = `${account.appid}-${meeting_code}`;
-      const existingSSE = this.sseConnections.get(sseKey);
-      if (existingSSE) {
-        existingSSE.close();
-        this.sseConnections.delete(sseKey);
-        this.logger.log(`🔌 Closed SSE connection for room ${meeting_code}`);
-      }
-
-      if (this.roomSessions.has(meeting_code)) {
-        const sessionId = this.roomSessions.get(meeting_code);
-        this.roomSessions.delete(meeting_code);
-        // Clear cache when removing session
-        this.sessionCache.delete(sessionId!);
-        this.logger.log(`🗑️ Cleared session ${sessionId} mapping for room ${meeting_code}`);
-      }
     } catch (error) {
       this.logger.error(
-        `Error removing agent: ${error}`,
-        (error as Error)?.stack
+        `❌ Failed to enable transcript for room ${roomName}:`,
+        error
       );
+      throw error;
     }
   }
 
-  async handleInviteAgent(
-    client: Nezon.Client,
-    event: AgentEvent,
-    account: Account
-  ): Promise<void> {
+  /**
+   * NEW: Disable transcript stream for voice room
+   */
+  async disableTranscript(roomName: string): Promise<void> {
     try {
-      const channel = await client.channels.fetch(
-        event.voice_channel_id ?? event.channel_id ?? ""
-      );
-
-      if (!channel?.meeting_code) {
-        this.logger.error("Channel or meeting_code not found");
-        return;
-      }
-
-      const meeting_code = channel.meeting_code;
+      const baseurl = this.configService.get<string>("AGENT_BASE_URL")!;
+      const url = `${baseurl}${AGENT_ENDPOINTS.AGENT_CONTROL_TRANSCRIPT}`;
 
       const payload = {
-        account,
-        room_name: meeting_code,
+        action: "disable",
+        room_name: roomName,
       };
 
-      let data;
+      this.logger.log(`🔇 Disabling transcript for room ${roomName}...`);
+      
+      const response = await this.axiosClient
+        .getInstance()
+        .post(url, payload);
 
-      try {
-        const response = await this.axiosClient
-          .getInstance()
-          .post(AGENT_ENDPOINTS.CREATE_DISPATCH, payload);
-
-        data = response.data;
-        this.logger.log(`Agent invited, API response: ${JSON.stringify(data)}`);
-      } catch (error) {
-        if (axios.isAxiosError(error) && error.response) {
-          this.logger.error(
-            `Invalid response from API: ${error.response.status
-            } - ${JSON.stringify(error.response.data)}`
-          );
-        } else {
-          this.logger.error(`Error calling API: ${error}`);
-        }
-        data = null;
-      }
-
-      try {
-        const baseurl = this.configService.get<string>("AGENT_BASE_URL")!;
-        const sseUrl = buildStreamMessageUrl(
-          baseurl,
-          account.appid,
-          account.token,
-          meeting_code
-        );
-        this.logger.log(`🔗 SSE URL: ${sseUrl}`);
-
-        const sseKey = `${account.appid}-${meeting_code}`;
-        const existingSSE = this.sseConnections.get(sseKey);
-        if (existingSSE) {
-          this.logger.log(`🔌 Closing existing SSE connection for room ${meeting_code}`);
-          existingSSE.close();
-          this.sseConnections.delete(sseKey);
-        }
-
-        this.createSSEConnection(sseUrl, meeting_code, account, client);
-      } catch (error) {
-        this.logger.error(
-          `Error setting up SSE: ${error}`,
-          (error as Error)?.stack
-        );
-      }
+      this.logger.log(
+        `✅ Transcript disabled for room ${roomName}: ${JSON.stringify(response.data)}`
+      );
     } catch (error) {
       this.logger.error(
-        `Error inviting agent: ${error}`,
+        `❌ Failed to disable transcript for room ${roomName}:`,
+        error
+      );
+      // Don't throw, as this is cleanup
+    }
+  }
+
+  /**
+ * UPDATED: Handle removing agent with correct payload format
+ */
+async handleRemoveAgent(
+  client: Nezon.Client,
+  event: AgentEvent,
+  account: Account,
+  sessionId: string, // NEW: Optional sessionId
+): Promise<void> {
+  try {
+    const channel = await client.channels.fetch(
+      event.voice_channel_id ?? event.channel_id ?? ""
+    );
+
+    if (!channel?.meeting_code) {
+      this.logger.error("Channel or meeting_code not found");
+      return;
+    }
+
+    const meeting_code = channel.meeting_code;
+
+    // NEW: Disable transcript before removing agent
+    try {
+      await this.disableTranscript(meeting_code);
+    } catch (error) {
+      this.logger.warn(`Failed to disable transcript, continuing with removal...`);
+    }
+
+    // UPDATED: Payload with type and metadata
+    const payload = {
+      account,
+      room_name: meeting_code,
+      type: "interview",
+      metadata: {
+        interview_id: sessionId,
+      },
+    };
+
+    this.logger.log(`Removing agent with payload: ${JSON.stringify(payload)}`);
+
+    const response = await this.axiosClient
+      .getInstance()
+      .post(AGENT_ENDPOINTS.CANCEL_DISPATCH, payload);
+
+    this.logger.log(
+      `Agent removed, API response: ${JSON.stringify(response.data)}`
+    );
+
+    const sseKey = `${account.appid}-${meeting_code}`;
+    const existingSSE = this.sseConnections.get(sseKey);
+    if (existingSSE) {
+      existingSSE.close();
+      this.sseConnections.delete(sseKey);
+      this.logger.log(`🔌 Closed SSE connection for room ${meeting_code}`);
+    }
+
+    // Clean up processed messages for this room
+    this.processedMessages.delete(meeting_code);
+
+    if (this.roomSessions.has(meeting_code)) {
+      const sessionId = this.roomSessions.get(meeting_code);
+      this.roomSessions.delete(meeting_code);
+      // Clear cache when removing session
+      this.sessionCache.delete(sessionId!);
+      this.logger.log(`🗑️ Cleared session ${sessionId} mapping for room ${meeting_code}`);
+    }
+  } catch (error) {
+    this.logger.error(
+      `Error removing agent: ${error}`,
+      (error as Error)?.stack
+    );
+  }
+}
+
+  async handleInviteAgent(
+  client: Nezon.Client,
+  event: AgentEvent,
+  account: Account,
+  sessionId: string, // NEW: Required sessionId
+): Promise<void> {
+  try {
+    const channel = await client.channels.fetch(
+      event.voice_channel_id ?? event.channel_id ?? ""
+    );
+
+    if (!channel?.meeting_code) {
+      this.logger.error("Channel or meeting_code not found");
+      return;
+    }
+
+    const meeting_code = channel.meeting_code;
+
+    // UPDATED: Payload with type and metadata
+    const payload = {
+      account,
+      room_name: meeting_code,
+      type: "interview",
+      metadata: {
+        interview_id: sessionId,
+      },
+    };
+
+    this.logger.log(`Inviting agent with payload: ${JSON.stringify(payload)}`);
+
+    let data;
+
+    try {
+      const response = await this.axiosClient
+        .getInstance()
+        .post(AGENT_ENDPOINTS.CREATE_DISPATCH, payload);
+
+      data = response.data;
+      this.logger.log(`Agent invited, API response: ${JSON.stringify(data)}`);
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response) {
+        this.logger.error(
+          `Invalid response from API: ${error.response.status
+          } - ${JSON.stringify(error.response.data)}`
+        );
+      } else {
+        this.logger.error(`Error calling API: ${error}`);
+      }
+      data = null;
+    }
+
+    // NEW: Enable transcript after bot joins
+    try {
+      this.logger.log(`⏳ Waiting 2 seconds for bot to fully join...`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      await this.enableTranscript(meeting_code);
+      this.logger.log(`✅ Transcript enabled for room ${meeting_code}`);
+    } catch (error) {
+      this.logger.error(
+        `❌ Failed to enable transcript: ${error}`,
         (error as Error)?.stack
       );
+      // Continue anyway, maybe manual retry later
+    }
+
+    try {
+      const baseurl = this.configService.get<string>("AGENT_BASE_URL")!;
+      const sseUrl = buildStreamMessageUrl(
+        baseurl,
+        account.appid,
+        account.token,
+        meeting_code
+      );
+
+      this.createSSEConnection(sseUrl, meeting_code, account, client);
+    } catch (error) {
+      this.logger.error(
+        `Failed to setup SSE for room ${meeting_code}: ${error}`,
+        (error as Error)?.stack
+      );
+    }
+  } catch (error) {
+    this.logger.error(
+      `Error inviting agent: ${error}`,
+      (error as Error)?.stack
+    );
+  }
+}
+
+  /**
+   * NEW: Check if message was already processed recently
+   */
+  private isDuplicateMessage(roomName: string, content: string): boolean {
+    const now = Date.now();
+    const roomMessages = this.processedMessages.get(roomName) || [];
+
+    // Clean up old messages beyond dedup window
+    const recentMessages = roomMessages.filter(
+      msg => (now - msg.timestamp) < this.MESSAGE_DEDUP_WINDOW_MS
+    );
+
+    // Check if this exact content was processed recently
+    const isDuplicate = recentMessages.some(msg => msg.content === content);
+
+    if (isDuplicate) {
+      return true;
+    }
+
+    // Add to processed messages
+    recentMessages.push({ content, timestamp: now });
+    this.processedMessages.set(roomName, recentMessages);
+
+    // Clean up old entries
+    this.cleanupProcessedMessages();
+
+    return false;
+  }
+
+  /**
+   * NEW: Clean up old processed messages
+   */
+  private cleanupProcessedMessages(): void {
+    const now = Date.now();
+    
+    for (const [roomName, messages] of this.processedMessages.entries()) {
+      const recentMessages = messages.filter(
+        msg => (now - msg.timestamp) < this.MESSAGE_DEDUP_WINDOW_MS
+      );
+      
+      if (recentMessages.length === 0) {
+        this.processedMessages.delete(roomName);
+      } else {
+        this.processedMessages.set(roomName, recentMessages);
+      }
     }
   }
 
@@ -222,6 +393,12 @@ export class AgentService {
         return;
       }
 
+      // NEW: Check for duplicate message
+      if (this.isDuplicateMessage(roomName, voiceText)) {
+        this.logger.log(`[Voice][Room ${roomName}] ⏭️ Skipping duplicate message: "${voiceText}"`);
+        return;
+      }
+
       this.logger.log(`[Voice][Room ${roomName}] Processing: "${voiceText}"`);
 
       // Get session for this room
@@ -258,12 +435,20 @@ export class AgentService {
       const channel = client.channels.get(session.channelId);
       if (channel) {
         await channel.send({
-          t: `${voiceText}`
+          t: `🎤 ${voiceText}`
         });
       }
 
-      // Process the answer
-      // await this.processUserAnswer(sessionId, client, session.channelId);
+      // ✅ FIX: Emit voice message processed event
+      if (this.voiceMessageCallback) {
+        this.voiceMessageCallback({
+          sessionId: session.id,
+          userId: session.userId,
+          channelId: session.channelId,
+          voiceText: voiceText,
+        });
+        this.logger.log(`[Voice] Emitted message processed event for session ${session.id}`);
+      }
 
     } catch (error) {
       this.logger.error(`[Voice] Error processing message:`, error);
@@ -321,7 +506,7 @@ export class AgentService {
  Template: ${session.template.name}
  Questions Answered: ${session.template.numberOfQuestions}
 
-━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━
 
 Generating detailed feedback...`;
       // Send final feedback to text channel
@@ -358,19 +543,19 @@ Generating detailed feedback...`;
     // Send TTS for next question
     await this.sendTTS(session.roomName, nextQuestion);
 
-    const responseMessage = ` Answer recorded!
+    const responseMessage = `✅ Answer recorded!
 
 **Bot is speaking the next question via voice...**
 
 If you want to see the text:
 
-━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━
 
 **Question ${nextQuestionNumber}/${totalQuestions}:**
 
 ${nextQuestion}
 
-━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━
 
 Type your answer or speak in the voice room...`;
 
@@ -420,7 +605,11 @@ Type your answer or speak in the voice room...`;
     if (cleared > 0) {
       this.logger.debug(`Cleared ${cleared} expired cache entries`);
     }
+
+    // Also cleanup processed messages
+    this.cleanupProcessedMessages();
   }
+  
   private createSSEConnection(
     sseUrl: string,
     meeting_code: string,
