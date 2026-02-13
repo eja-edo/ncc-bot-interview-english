@@ -263,7 +263,7 @@ export class AgentService {
       }
 
       // Process the answer
-      await this.processUserAnswer(sessionId, client, session.channelId);
+      // await this.processUserAnswer(sessionId, client, session.channelId);
 
     } catch (error) {
       this.logger.error(`[Voice] Error processing message:`, error);
